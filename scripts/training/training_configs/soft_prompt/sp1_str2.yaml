@@ -1,0 +1,33 @@
+# --- Paths ---
+data_path: "data/STR_data/reference_based_labeled_seqs/str_len_2_max_cnp_perc_0.975_n_flanking_512.tsv"
+experiment_name: "soft_prompt_dev_v1_str2"
+
+# --- Data Params (from data.py) ---
+batch_size: 512
+num_workers: 4
+n_flanking_bp: 442
+n_str_bp: 6
+
+# --- Model Params (from model.py) ---
+hyenaDNA_checkpoint: "LongSafari/hyenadna-tiny-1k-seqlen-hf"
+n_prompt_tokens: 8
+
+# --- Strategy: This is the key for this run ---
+tuning_strategy: "soft_prompt"
+
+# --- Optimizer ---
+optimizer_name: "AdamW"
+lr: 1e-4
+weight_decay: 0.01
+
+# --- Scheduler ---
+scheduler_name: "ReduceLROnPlateau"
+scheduler_patience: 3
+scheduler_factor: 0.1
+
+# --- Trainer Params ---
+max_epochs: 20
+patience_early_stopping: 10
+gradient_clip_val: 1.0
+precision: "16-mixed"
+# For mixed precision training, use "16-mixed"

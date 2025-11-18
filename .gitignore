@@ -1,3 +1,18 @@
+# Repo specific
+
+# STR data files
+**/STR_data/**/*.bed
+**/STR_data/**/*.tsv
+
+# Training output
+**/training/output/
+**/training/dev1.py
+
+# Ref genome files
+**/reference_genome/*.fa
+**/reference_genome/*.fai
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
