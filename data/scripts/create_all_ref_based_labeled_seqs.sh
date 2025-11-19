@@ -15,7 +15,8 @@ do
 	do
 		N_FLANKING=$((MAX_SEQ_LEN / 4))
 
-		LOG_FILE="log_create_ref_seqs_strlen${STR_LEN}_maxseqlen${MAX_SEQ_LEN}_maxperc${MAX_PERCENTILE}_edge${DIST_FROM_EDGE}.txt"
+		LOG_DIR="../STR_data/reference_based_labeled_seqs"
+		LOG_FILE="${LOG_DIR}/log_create_ref_seqs_strlen${STR_LEN}_maxseqlen${MAX_SEQ_LEN}_maxperc${MAX_PERCENTILE}_edge${DIST_FROM_EDGE}.txt"
 
 		echo "Creating reference-based labeled sequences for:"
 		echo "  STR length: ${STR_LEN}"
