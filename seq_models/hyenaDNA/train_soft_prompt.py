@@ -14,6 +14,7 @@ import os
 import json
 import yaml
 
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
 	ModelCheckpoint,
@@ -27,6 +28,9 @@ from seq_models.hyenaDNA.data import create_data_module
 
 
 if __name__ == "__main__":
+
+	__spec__ = None
+
 	parser = argparse.ArgumentParser(description="Train STRLengthModel")
 	parser.add_argument(
 		"--config",
@@ -65,6 +69,11 @@ if __name__ == "__main__":
 		args.output_dir, f"{experiment_name}_{timestamp}"
 		)
 	os.makedirs(experiment_path, exist_ok=True)
+
+	# Save a copy of the config used
+	config_save_path = os.path.join(experiment_path, "config.yaml")
+	with open(config_save_path, 'w') as f:
+		yaml.dump(config, f)
 
 	logger = TensorBoardLogger(save_dir=experiment_path, name="", version=".")
 	print(f"Outputs will be saved to: {experiment_path}")
@@ -114,6 +123,29 @@ if __name__ == "__main__":
 		print("--- Using 'auto' accelerator (GPU/MPS if available) ---")
 		accelerator = "auto"
 		devices = 1
+
+	# Check precision settings wrt hardware
+	requested_precision = config.get("precision", "32-true")
+	
+	# If user requested bf16, but we are not on CPU, check hardware support
+	if "bf16" in requested_precision and not args.cpu:
+		if torch.cuda.is_available():
+			if torch.cuda.is_bf16_supported():
+				print(f"Hardware ({torch.cuda.get_device_name(0)}) supports BF16. Using: {requested_precision}")
+			else:
+				print(f"Hardware ({torch.cuda.get_device_name(0)}) does NOT support BF16.")
+				print(f"   > Downgrading precision to '16-mixed' (Standard FP16).")
+				config["precision"] = "16-mixed"
+		
+		elif torch.backends.mps.is_available():
+			print("Hardware (MPS) detected.")
+			print("   > Downgrading precision to '16-mixed' (Standard FP16).")
+			config["precision"] = "16-mixed"
+		
+		else:
+			print(f"Using configured precision: {requested_precision}")
+	else:
+		print(f"Using configured precision: {requested_precision}")
 
 	trainer = pl.Trainer(
 		max_epochs=config.get("max_epochs", 100),

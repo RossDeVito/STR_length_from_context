@@ -1,5 +1,16 @@
 """ Dataset and data loaders for STR length task with soft prompting. 
 
+Requires a TSV file with columns:
+- chrom: Chromosome name (e.g., 'chr1')
+- str_start: Start index of the STR
+- str_end: End index of the STR (first base after the STR)
+- copy_number: Copy number of the STR in reference genome
+- rev_comp: Boolean indicating if sequence is reverse complement
+- split: One of 'train', 'val', or 'test' indicating data split
+
+As well as reference genome FASTA file to extract sequences. (.fa and .fai,
+see data/STR_data/reference_genome/download.sh)
+
 Function create_data_module() creates a PyTorch Lightning DataModule
 based on the arguments in a config file used by the training script.
 See create_data_module() docstring for required and optional config keys.
@@ -10,6 +21,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 import pandas as pd
+
+from pyfaidx import Fasta
 
 from seq_models.hyenaDNA.hyenaDNA_info import PROMPT_START_ID
 
@@ -22,6 +35,7 @@ def create_data_module(config):
 
 	Required config keys:
 		data_path (str): Path to the data file.
+		ref_path (str): Path to the reference genome FASTA file.
 		hyenaDNA_checkpoint (str): Checkpoint name or path for tokenizer.
 		batch_size (int): Batch size for data loaders.
 		n_flanking_bp (int): Number of flanking base pairs to include
@@ -38,6 +52,7 @@ def create_data_module(config):
 
 	return STRLengthDataModule(
 		data_path=config["data_path"],
+		ref_path=config["ref_path"],
 		tokenizer_checkpoint=config["hyenaDNA_checkpoint"],
 		batch_size=config["batch_size"],
 		n_flanking_bp=config["n_flanking_bp"],
@@ -47,12 +62,12 @@ def create_data_module(config):
 	)
 
 
-
 class STRLengthDataset(Dataset):
 	""" Dataset for STR length prediction with soft prompting. 
 	
 	Attributes:
 		str_df (pd.DataFrame): DataFrame with STR information.
+		ref_path (str): Path to the reference genome FASTA file.
 		tokenizer (transformers.PreTrainedTokenizer): Tokenizer to use.
 		n_flanking_bp (int): Number of flanking base pairs to include on
 			each side of the STR.
@@ -66,6 +81,7 @@ class STRLengthDataset(Dataset):
 	def __init__(
 		self,
 		str_df,
+		ref_path,
 		tokenizer,
 		n_flanking_bp,
 		n_str_bp,
@@ -75,6 +91,7 @@ class STRLengthDataset(Dataset):
 		
 		Args:
 			str_df (pd.DataFrame): DataFrame with STR information.
+			ref_path (str): Path to the reference genome FASTA file.
 			tokenizer (transformers.PreTrainedTokenizer): Tokenizer to use.
 			n_flanking_bp (int): Number of flanking base pairs to include on
 				each side of the STR.
@@ -85,10 +102,15 @@ class STRLengthDataset(Dataset):
 		"""
 		
 		self.str_df = str_df.reset_index(drop=True)
+		self.ref_path = ref_path
 		self.tokenizer = tokenizer
 		self.n_flanking_bp = n_flanking_bp
 		self.n_str_bp = n_str_bp
 		self.n_prompt_tokens = n_prompt_tokens
+
+		# Do NOT initialize Fasta here. 
+		# It breaks pickling for num_workers > 0.
+		self.ref_genome = None
 
 		# Create prompt token IDs
 		self.prompt_token_ids = torch.arange(
@@ -102,22 +124,14 @@ class STRLengthDataset(Dataset):
 		return len(self.str_df)
 	
 	def validity_check(self):
-		"""Check that the provided pre and post sequences are long enough.
-
-		Assumes pre_seq and post_seq are strings all of the same lengths.
-		"""
-
-		# Check length of pre_seq and post_seq columns are as long as
-		# n_flanking_bp by checking first row
-		first_row = self.str_df.iloc[0]
-		assert len(first_row["pre_seq"]) >= self.n_flanking_bp, (
-			f"Pre-sequence length {len(first_row['pre_seq'])} is less than "
-			f"n_flanking_bp {self.n_flanking_bp}"
-		)
-		assert len(first_row["post_seq"]) >= self.n_flanking_bp, (
-			f"Post-sequence length {len(first_row['post_seq'])} is less than "
-			f"n_flanking_bp {self.n_flanking_bp}"
-		)
+		"""Throws warning is 2 * n_str_bp is greater than min STR length."""
+		min_str_length = (self.str_df["str_end"] - self.str_df["str_start"]).min()
+		if 2 * self.n_str_bp > min_str_length:
+			print(
+				f"WARNING: 2 * n_str_bp ({2 * self.n_str_bp}) is greater than "
+				f"minimum STR length ({min_str_length}). "
+				"Consider reducing n_str_bp to avoid overlapping STR regions."
+			)
 
 	def __getitem__(self, idx):
 		"""Get item at index idx.
@@ -129,22 +143,45 @@ class STRLengthDataset(Dataset):
 			dict: Dictionary with keys 'input_ids' and 'label'.
 		"""
 
+		# Lazy Load Fasta
+		if self.ref_genome is None:
+			# sequence_always_upper=True is safer for tokenizers
+			self.ref_genome = Fasta(self.ref_path, sequence_always_upper=True)
+
+		row = self.str_df.iloc[idx]
+		chrom = row["chrom"]
+		start = row["str_start"]
+		end = row["str_end"]
+
 		# Get sequences
-		pre_seq = self.str_df.iloc[idx]["pre_seq"][-self.n_flanking_bp :]
-		post_seq = self.str_df.iloc[idx]["post_seq"][: self.n_flanking_bp]
-		
-		str_start_seq = self.str_df.iloc[idx]["str_seq"][: self.n_str_bp]
-		str_end_seq = self.str_df.iloc[idx]["str_seq"][-self.n_str_bp :]
+		pre_seq = self.ref_genome[
+			chrom
+		][
+			start - self.n_flanking_bp : start + self.n_str_bp
+		]
+		post_seq = self.ref_genome[
+			chrom
+		][
+			end - self.n_str_bp : end + self.n_flanking_bp
+		]
+
+		# Flip is reverse complement
+		if self.str_df.iloc[idx]["rev_comp"]:
+			final_pre_seq = post_seq.reverse.complement.seq
+			final_post_seq = pre_seq.reverse.complement.seq
+		else:
+			final_pre_seq = pre_seq.seq
+			final_post_seq = post_seq.seq
 
 		# Combine and tokenize
 		start_tokens = self.tokenizer(
-			pre_seq + str_start_seq,
+			final_pre_seq,
 			add_special_tokens=False,
 			return_tensors='pt'
 		).input_ids.squeeze(0)
 
 		end_tokens = self.tokenizer(
-			str_end_seq + post_seq,
+			final_post_seq,
 			add_special_tokens=False,
 			return_tensors='pt'
 		).input_ids.squeeze(0)
@@ -172,6 +209,7 @@ class STRLengthDataModule(pl.LightningDataModule):
 	def __init__(
 		self,
 		data_path,
+		ref_path,
 		tokenizer_checkpoint,
 		batch_size,
 		n_flanking_bp,
@@ -203,6 +241,7 @@ class STRLengthDataModule(pl.LightningDataModule):
 		test_df = full_df[full_df["split"] == "test"].reset_index(drop=True)
 
 		dataset_args = {
+			"ref_path": self.hparams.ref_path,
 			"tokenizer": self.tokenizer,
 			"n_flanking_bp": self.hparams.n_flanking_bp,
 			"n_str_bp": self.hparams.n_str_bp,
@@ -220,6 +259,7 @@ class STRLengthDataModule(pl.LightningDataModule):
 			shuffle=True,
 			num_workers=self.hparams.num_workers,
 			persistent_workers=True,
+			pin_memory=True,
 		)
 	
 	def val_dataloader(self):
@@ -229,6 +269,7 @@ class STRLengthDataModule(pl.LightningDataModule):
 			shuffle=False,
 			num_workers=self.hparams.num_workers,
 			persistent_workers=True,
+			pin_memory=True,
 		)
 	
 	def test_dataloader(self):
@@ -238,4 +279,5 @@ class STRLengthDataModule(pl.LightningDataModule):
 			shuffle=False,
 			num_workers=self.hparams.num_workers,
 			persistent_workers=True,
+			pin_memory=True,
 		)
