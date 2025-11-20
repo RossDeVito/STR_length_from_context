@@ -1,9 +1,32 @@
-"""Create data files with reference-based labeled sequences.
+"""Create data files with indices of reference genome STRs.
 
 Filters to just perfect repeats.
 
+Checks that STR is at least n_flanking bases from edge of chromosome
+so that flanking sequence can be extracted on both sides of at most that
+length.
+
+Adds two rows for each STR: the original sequence and its reverse complement.
+
 Will also create 8:1:1 train/val/test splits and create reverse complements
 for each STR that are in the same split as the original sequence.
+
+Output columns:
+- HipSTR_name: Name of the STR in HipSTR reference
+- chrom: Chromosome of the STR
+- rev_comp: Boolean indicating if sequence is reverse complement
+- copy_number: Copy number of the STR in reference genome
+- str_start: Start position of the STR in reference genome with 0-based
+	indexing to match pyfaidx
+- str_end: End position of the STR in reference genome with 0-based
+	indexing to match pyfaidx. Note that this is the first base *after* the STR.
+- split: One of 'train', 'val', or 'test' indicating data split
+
+CLI arguments:
+- str_len: Length of the STR to consider (e.g., 2 for dinucleotide repeats)
+- n_flanking: Number of flanking bases that must exist on each side of the STR
+- copy_num_percentile_max: Maximum copy number percentile to include (e.g.,
+	0.99) for given str_len
 """
 
 import os
@@ -40,14 +63,6 @@ def get_args():
 		type=float, 
 		help="Maximum copy number percentile to include (e.g., 0.99)."
 	)
-	
-	parser.add_argument(
-		"-d",
-		"--distance-from-edge",
-		type=int,
-		default=0,
-		help="Minimum distance from chromosome edge to consider STR."
-	)
 
 	return parser.parse_args()
 
@@ -65,7 +80,6 @@ if __name__ == "__main__":
 	print(f"\tSTR length: {str_len}")
 	print(f"\tNumber of flanking bases: {n_flanking}")
 	print(f"\tMaximum copy number percentile: {copy_num_percentile_max}")
-	print(f"\tDistance from edge: {args.distance_from_edge}")
 
 	# Paths
 	script_dir = os.path.abspath(os.path.dirname(__file__))
@@ -88,7 +102,7 @@ if __name__ == "__main__":
 		script_dir,
 		"..",
 		"STR_data",
-		"reference_based_labeled_seqs"
+		"reference_based_labeled_strs"
 	)
 
 	# Load HipSTR reference
@@ -111,6 +125,7 @@ if __name__ == "__main__":
 		print(f"No STRs found with motif length {str_len}")
 		exit()
 
+	# Filter by copy number percentile
 	copy_num_threshold = str_df["ref_repeats"].quantile(copy_num_percentile_max)
 	str_df = str_df[str_df["ref_repeats"] <= copy_num_threshold]
 	print(
@@ -134,49 +149,55 @@ if __name__ == "__main__":
 		"chr13": "val",
 		"chr3": "val"
 	}
-	
-	buffer_distance = max(n_flanking, args.distance_from_edge)
 
-	# Flag to validate that pre + str + post seqs match reference once
+	# Flag that str and flanking sequence loading check still needs to be done
 	first_check_done = False
 
 	for _, row in tqdm.tqdm(str_df.iterrows(), total=len(str_df)):
 
-		str_seq = ref_genome[row["chrom"]][row["start"] - 1 : row["end"]]
+		start_idx = row["start"] - 1  # Convert to 0-based indexing
+		end_idx = row["end"]  # End is 0-based exclusive
+
+		str_seq = ref_genome[row["chrom"]][start_idx:end_idx]
 		
 		# Check if perfect repeat
 		base_motif = str_seq[:str_len].seq
 		perfect_motif_str = (
-			base_motif * int(row["ref_repeats"]) + 
-			base_motif[: int(row["ref_repeats"] % 1 * str_len)]
-		)
+			base_motif * int(row["ref_repeats"] + 1)
+		)[: end_idx - start_idx]
 
-		if str_seq != perfect_motif_str:
+		if str_seq.seq != perfect_motif_str:
 			imperfect_count += 1
 			continue
 
-		# Get flanking sequences
+		# Confirm flanking sequence of max length n_flanking exists
 		if (
-			row["start"] - 1 - buffer_distance < 0 
-			or row["end"] + buffer_distance > len(ref_genome[row["chrom"]])
+			row["start"] - 1 - n_flanking < 0 
+			or row["end"] + n_flanking > len(ref_genome[row["chrom"]])
 		):
 			out_of_bounds_count += 1
 			continue
-			
-		pre_seq = ref_genome[row["chrom"]][
-			row["start"] - 1 - n_flanking : row["start"] - 1
-		]
-		post_seq = ref_genome[row["chrom"]][
-			row["end"] : row["end"] + n_flanking
-		]
 
-		# One time integrity check
+		# One time integrity check using 100 flanking bases
 		if not first_check_done:
+			n_flanking_check = n_flanking
+
+			pre_seq = ref_genome[row["chrom"]][
+				start_idx - n_flanking_check : start_idx
+			]
+			assert len(pre_seq) == n_flanking_check
+
+			post_seq = ref_genome[row["chrom"]][
+				end_idx : end_idx + n_flanking_check
+			]
+			assert len(post_seq) == n_flanking_check
+
+			# Reconstruct full sequence
 			reconstructed_seq = pre_seq.seq + str_seq.seq + post_seq.seq
 			
 			# Fetch the contiguous block from reference
 			ground_truth_seq = ref_genome[row["chrom"]][
-				row["start"] - 1 - n_flanking : row["end"] + n_flanking
+				start_idx - n_flanking_check : end_idx + n_flanking_check
 			].seq
 
 			# Compare
@@ -195,9 +216,8 @@ if __name__ == "__main__":
 			"chrom": row["chrom"],
 			"rev_comp": False,
 			"copy_number": row["ref_repeats"],
-			"pre_seq": pre_seq.seq,
-			"str_seq": str_seq.seq,
-			"post_seq": post_seq.seq,
+			"str_start": start_idx,
+			"str_end": end_idx,
 			"split": chrom_to_split.get(row["chrom"], "train"),
 		})
 
@@ -206,9 +226,8 @@ if __name__ == "__main__":
 			"chrom": row["chrom"],
 			"rev_comp": True,
 			"copy_number": row["ref_repeats"],
-			"pre_seq": post_seq.reverse.complement.seq,
-			"str_seq": str_seq.reverse.complement.seq,
-			"post_seq": pre_seq.reverse.complement.seq,
+			"str_start": start_idx,
+			"str_end": end_idx,
 			"split": chrom_to_split.get(row["chrom"], "train"),
 		})
 
@@ -236,7 +255,7 @@ if __name__ == "__main__":
 	perfect_str_df.to_csv(
 		os.path.join(
 			output_dir,
-			f"str_len_{str_len}_max_cnp_perc_{copy_num_percentile_max}_n_flanking_{n_flanking}_buffer_bp_{buffer_distance}.tsv"
+			f"str_len_{str_len}_max_cn_perc_{copy_num_percentile_max}_n_flanking_{n_flanking}.tsv"
 		),
 		sep="\t",
 		index=False
