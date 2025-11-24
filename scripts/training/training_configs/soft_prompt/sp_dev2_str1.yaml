@@ -4,7 +4,7 @@ ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hl
 experiment_name: "soft_prompt_dev_v2_str1"
 
 # --- Data Params (from data.py) ---
-batch_size: 512
+batch_size: 128
 num_workers: 4
 n_flanking_bp: 8000
 n_str_bp: 8
