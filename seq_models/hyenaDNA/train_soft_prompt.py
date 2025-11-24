@@ -154,7 +154,8 @@ if __name__ == "__main__":
 		logger=logger,
 		callbacks=callbacks,
 		gradient_clip_val=config.get("gradient_clip_val", 0.0),
-		precision=config.get("precision", "32-true")
+		precision=config.get("precision", "32-true"),
+		accumulate_grad_batches=config.get("accumulate_grad_batches", 1),
 	)
 
 	# Run training
