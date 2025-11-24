@@ -4,7 +4,7 @@ ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hl
 experiment_name: "soft_prompt_dev_v2_str1"
 
 # --- Data Params (from data.py) ---
-batch_size: 16
+batch_size: 512
 num_workers: 4
 n_flanking_bp: 8000
 n_str_bp: 8
@@ -17,9 +17,9 @@ n_prompt_tokens: 128
 tuning_strategy: "soft_prompt"
 
 # --- Optimizer ---
-optimizer_name: "AdamW"
+optimizer_name: "Adam"
 lr: 1e-4
-weight_decay: 0.01
+weight_decay: 0.0
 
 # --- Scheduler ---
 scheduler_name: "ReduceLROnPlateau"

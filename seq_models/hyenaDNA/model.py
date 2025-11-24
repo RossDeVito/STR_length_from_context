@@ -117,6 +117,8 @@ class STRLengthModel(pl.LightningModule):
 	):
 		""" Initialize STRLengthModel.
 
+		Sets gradient checkpointing to True for memory efficiency.
+
 		Args:
 			model_checkpoint (str): HF checkpoint name.
 			n_prompt_tokens (int): Number of soft prompt tokens.
@@ -145,6 +147,9 @@ class STRLengthModel(pl.LightningModule):
 			trust_remote_code=True,
 			num_labels=1  # Create new regression head
 		)
+
+		# Enable gradient checkpointing for memory efficiency
+		self.model.gradient_checkpointing_enable()
 
 		# Add soft prompt tokens to embedding matrix
 		self.model.resize_token_embeddings(
