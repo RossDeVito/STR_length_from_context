@@ -6,8 +6,8 @@ PROMPT_START_ID = 16
 MAX_SEQ_LENGTH = {
 	'LongSafari/hyenadna-tiny-1k-seqlen-hf': 1024,
 	'LongSafari/hyenadna-tiny-1k-seqlen-d256-hf': 1024,
-	'LongSafari/hyenadna-small-32k-seqlen': 32768,
-	'LongSafari/hyenadna-medium-160k-seqlen': 160000,
-	'LongSafari/hyenadna-medium-450k-seqlen': 450000,
-	'LongSafari/hyenadna-large-1m-seqlen': 1_000_000,
+	'LongSafari/hyenadna-small-32k-seqlen-hf': 32768,
+	'LongSafari/hyenadna-medium-160k-seqlen-hf': 160000,
+	'LongSafari/hyenadna-medium-450k-seqlen-hf': 450000,
+	'LongSafari/hyenadna-large-1m-seqlen-hf': 1_000_000,
 }

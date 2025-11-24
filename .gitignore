@@ -1,6 +1,7 @@
 # Repo specific
 
 expanse_cmds.md
+tscc_cmds.md
 
 # STR data files
 **/STR_data/**/*.bed
