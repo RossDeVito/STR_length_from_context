@@ -5,7 +5,7 @@ experiment_name: "soft_prompt_dev_v2_str2"
 
 # --- Data Params (from data.py) ---
 batch_size: 16
-accumulate_grad_batches: 4
+accumulate_grad_batches: 8
 num_workers: 4
 n_flanking_bp: 8000
 n_str_bp: 8

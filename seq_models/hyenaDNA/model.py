@@ -54,6 +54,8 @@ def create_model(config):
 		warmup_steps (int): Steps for linear/cosine warmup. Default: 100.
 		scheduler_patience (int): Patience for ReduceLROnPlateau. Default: 3.
 		scheduler_factor (float): Factor for ReduceLROnPlateau. Default: 0.1.
+		use_gradient_checkpointing (bool): Whether to use gradient checkpointing.
+			Default: False.
 	"""
 	# Verify that the model can handle the input length
 	total_input_length = (
@@ -86,7 +88,8 @@ def create_model(config):
 		scheduler_name=config.get("scheduler_name", "ReduceLROnPlateau"),
 		warmup_steps=config.get("warmup_steps", 100),
 		scheduler_patience=config.get("scheduler_patience", 3),
-		scheduler_factor=config.get("scheduler_factor", 0.1)
+		scheduler_factor=config.get("scheduler_factor", 0.1),
+		use_gradient_checkpointing=config.get("gradient_checkpointing", False),
 	)
 
 
@@ -113,7 +116,10 @@ class STRLengthModel(pl.LightningModule):
 		scheduler_name: str,
 		warmup_steps: int,
 		scheduler_patience: int,
-		scheduler_factor: float
+		scheduler_factor: float,
+
+		# Gradient Checkpointing
+		use_gradient_checkpointing: bool = False,
 	):
 		""" Initialize STRLengthModel.
 
@@ -149,7 +155,8 @@ class STRLengthModel(pl.LightningModule):
 		)
 
 		# Enable gradient checkpointing for memory efficiency
-		self.model.gradient_checkpointing_enable()
+		if use_gradient_checkpointing:
+			self.model.gradient_checkpointing_enable()
 
 		# Add soft prompt tokens to embedding matrix
 		self.model.resize_token_embeddings(

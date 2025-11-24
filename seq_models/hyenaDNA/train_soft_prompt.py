@@ -130,7 +130,7 @@ if __name__ == "__main__":
 	# If user requested bf16, but we are not on CPU, check hardware support
 	if "bf16" in requested_precision and not args.cpu:
 		if torch.cuda.is_available():
-			if torch.cuda.is_bf16_supported():
+			if torch.cuda.is_bf16_supported(including_emulation=False):
 				print(f"Hardware ({torch.cuda.get_device_name(0)}) supports BF16. Using: {requested_precision}")
 			else:
 				print(f"Hardware ({torch.cuda.get_device_name(0)}) does NOT support BF16.")
