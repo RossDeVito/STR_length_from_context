@@ -126,7 +126,17 @@ class STRLengthDataset(Dataset):
 	def validity_check(self):
 		"""Throws warning is 2 * n_str_bp is greater than min STR length."""
 		min_str_length = (self.str_df["str_end"] - self.str_df["str_start"]).min()
-		if 2 * self.n_str_bp > min_str_length:
+
+		# Raise error if n_str_bp is longer than smallest STR
+		if self.n_str_bp > min_str_length:
+			raise ValueError(
+				f"n_str_bp ({self.n_str_bp}) is greater than "
+				f"minimum STR length ({min_str_length}). "
+				"Reduce n_str_bp to avoid data leakage."
+			)
+		# Warn if 2 * n_str_bp is longer than smallest STR, though
+		# should not cause leakage
+		elif 2 * self.n_str_bp > min_str_length:
 			print(
 				f"WARNING: 2 * n_str_bp ({2 * self.n_str_bp}) is greater than "
 				f"minimum STR length ({min_str_length}). "

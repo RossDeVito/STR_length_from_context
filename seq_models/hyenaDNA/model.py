@@ -77,6 +77,7 @@ def create_model(config):
 	return STRLengthModel(
 		hyenaDNA_checkpoint=config["hyenaDNA_checkpoint"],
 		n_prompt_tokens=config["n_prompt_tokens"],
+		log_transform=config.get("log_transform", False),
 		
 		tuning_strategy=config.get("tuning_strategy", "soft_prompt"),
 		
@@ -118,8 +119,9 @@ class STRLengthModel(pl.LightningModule):
 		scheduler_patience: int,
 		scheduler_factor: float,
 
-		# Gradient Checkpointing
+		# Args with defaults
 		use_gradient_checkpointing: bool = False,
+		log_transform: bool = False,
 	):
 		""" Initialize STRLengthModel.
 

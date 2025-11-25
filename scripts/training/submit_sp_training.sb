@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH --job-name=hyena_sp_train
+#SBATCH --partition=hotel-gpu
+#SBATCH --qos=hotel-gpu
+#SBATCH --account=htl149
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:v100:1
+#SBATCH --mem=100G
+#SBATCH --time=48:00:00
+#SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/sp_train_%j.out
+#SBATCH --error=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/sp_train_%j.err
+
+# Argument Parsing
+CONFIG_NAME=$1
+
+if [ -z "$CONFIG_NAME" ]; then
+    echo "Error: No config name provided."
+    echo "Usage: sbatch submit_sp_training.sb config_filename.yaml"
+    exit 1
+fi
+
+echo "Job $SLURM_JOB_ID started on $(hostname) at $(date)"
+echo "Config: $CONFIG_NAME"
+echo "Slurm logs saved to: $LOG_DIR"
+
+# Navigate to your project root
+PROJECT_ROOT="/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context/"
+cd "$PROJECT_ROOT" || exit 1
+
+# Activate Environment
+source ~/.bashrc
+conda activate str_len_pred_gpu
+
+# Run wrapper script
+./scripts/training/run_soft_prompt_training.sh "$CONFIG_NAME"
+
+echo "Job finished at $(date)"
