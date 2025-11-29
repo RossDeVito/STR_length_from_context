@@ -1,7 +1,7 @@
 # --- Paths ---
 data_path: "data/STR_data/reference_based_labeled_strs/str_len_2_max_cn_perc_0.975_n_flanking_250000.tsv"
 ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
-experiment_name: "str2/dev/dev2"
+experiment_name: "str2/dev/dev3"
 
 # --- Data Params (from data.py) ---
 batch_size: 16
