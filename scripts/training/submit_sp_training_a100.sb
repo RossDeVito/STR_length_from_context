@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=hyena_sp_train
+#SBATCH --job-name=hyena_sp_train_a100
 #SBATCH --partition=hotel-gpu
 #SBATCH --qos=hotel-gpu
 #SBATCH --account=htl149
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --gres=gpu:v100:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --mem=50G
 #SBATCH --time=48:00:00
 #SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/sp_train_%j.out
