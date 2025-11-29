@@ -119,7 +119,6 @@ class STRLengthModel(pl.LightningModule):
 		scheduler_patience: int,
 		scheduler_factor: float,
 
-		# Args with defaults
 		use_gradient_checkpointing: bool = False,
 		log_transform: bool = False,
 	):
@@ -230,11 +229,19 @@ class STRLengthModel(pl.LightningModule):
 		labels = batch["label"] 
 		outputs = self(input_ids) 
 		logits = outputs.logits.squeeze(1)
-		loss = self.loss_fn(logits, labels)
-		return loss, logits, labels
+
+		if self.hparams.log_transform:
+			optimization_targets = torch.log1p(labels)
+			loss = self.loss_fn(logits, optimization_targets)
+			preds = torch.expm1(logits).detach()
+		else:
+			loss = self.loss_fn(logits, labels)
+			preds = logits.detach()
+			
+		return loss, preds, labels
 	
 	def training_step(self, batch, batch_idx):
-		loss, logits, labels = self._common_step(batch)
+		loss, preds, labels = self._common_step(batch)
 		
 		# Log training loss (for overfitting check)
 		self.log(
@@ -243,13 +250,13 @@ class STRLengthModel(pl.LightningModule):
 		)
 		
 		# Update and log training metrics (at epoch end)
-		self.train_metrics.update(logits, labels)
+		self.train_metrics.update(preds, labels)
 		self.log_dict(self.train_metrics, on_step=False, on_epoch=True)
 		
 		return loss
 
 	def validation_step(self, batch, batch_idx):
-		loss, logits, labels = self._common_step(batch)
+		loss, preds, labels = self._common_step(batch)
 		
 		# Log validation loss
 		self.log(
@@ -258,15 +265,11 @@ class STRLengthModel(pl.LightningModule):
 		)
 		
 		# Update and log validation metrics
-		self.val_metrics.update(logits, labels)
+		self.val_metrics.update(preds, labels)
 		self.log_dict(self.val_metrics, on_step=False, on_epoch=True)
 
 	def test_step(self, batch, batch_idx):
-		"""
-		Runs at the end of training, on the test set.
-		(Called with trainer.test())
-		"""
-		loss, logits, labels = self._common_step(batch)
+		loss, preds, labels = self._common_step(batch)
 		
 		# Log test loss
 		self.log(
@@ -275,8 +278,19 @@ class STRLengthModel(pl.LightningModule):
 		)
 		
 		# Update and log test metrics
-		self.test_metrics.update(logits, labels)
+		self.test_metrics.update(preds, labels)
 		self.log_dict(self.test_metrics, on_step=False, on_epoch=True)
+
+	def predict_step(self, batch, batch_idx, dataloader_idx=0):
+		"""Returns predictions in real units (base pairs)."""
+		input_ids = batch["input_ids"]
+		outputs = self(input_ids)
+		logits = outputs.logits.squeeze(1)
+		
+		if self.hparams.log_transform:
+			return torch.expm1(logits)
+		else:
+			return logits
 
 	def configure_optimizers(self):
 		
