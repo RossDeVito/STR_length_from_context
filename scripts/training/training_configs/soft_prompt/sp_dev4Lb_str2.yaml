@@ -26,7 +26,7 @@ tuning_strategy: "soft_prompt"
 
 # --- Optimizer ---
 optimizer_name: "Adam"
-lr: 1e-4
+lr: 1e-3
 weight_decay: 0.0
 
 # --- Scheduler ---
