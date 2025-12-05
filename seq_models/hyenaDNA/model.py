@@ -195,7 +195,6 @@ class STRLengthModel(pl.LightningModule):
 		# Overwrite in hierarchy
 		self.hyena_model.backbone.embeddings.word_embeddings = new_embed
 		self.hyena_model.config.vocab_size = new_num_tokens
-		self.hyena_model.backbone.config.vocab_size = new_num_tokens
 
 		# Verify resize
 		assert self.hyena_model.backbone.embeddings.word_embeddings.weight.shape == (new_num_tokens, self.hidden_size)
