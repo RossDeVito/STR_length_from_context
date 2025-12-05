@@ -219,7 +219,7 @@ class STRLengthModel(pl.LightningModule):
 				param.requires_grad = False
 			
 			# Unfreeze the entire embedding parameter
-			embed_param = self.hyena_model.get_input_embeddings().weight
+			embed_param = self.hyena_model.backbone.embeddings.word_embeddings.weight
 			embed_param.requires_grad = True
 			
 			# And register a hook that will zero out the gradients
@@ -374,10 +374,10 @@ class STRLengthModel(pl.LightningModule):
 
 		elif self.hparams.tuning_strategy == "full_finetune":
 			high_lr_params = list(self.head.parameters())
-			high_lr_params += list(self.hyena_model.get_input_embeddings().parameters())
+			high_lr_params += list(self.hyena_model.backbone.embeddings.word_embeddings.parameters())
 			
 			if self.hparams.use_attention_pooling:
-				high_lr_params.append(self.pohyena_modeloling_query)
+				high_lr_params.append(self.pooling_query.parameters())
 				high_lr_params += list(self.attn_pooling_layer.parameters())
 
 			high_lr_ids = {id(p) for p in high_lr_params}
