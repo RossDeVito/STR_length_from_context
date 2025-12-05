@@ -14,7 +14,8 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from transformers import (
-	AutoModelForSequenceClassification,
+	AutoModel,
+	AutoConfig,
 	get_linear_schedule_with_warmup,
 	get_cosine_schedule_with_warmup
 )
@@ -78,6 +79,11 @@ def create_model(config):
 		hyenaDNA_checkpoint=config["hyenaDNA_checkpoint"],
 		n_prompt_tokens=config["n_prompt_tokens"],
 		log_transform=config.get("log_transform", False),
+
+		head_hidden_layers=config.get("head_hidden_layers", None), # e.g. [128, 64]
+		head_dropout=float(config.get("head_dropout", 0.1)),
+		use_attention_pooling=config.get("use_attention_pooling", False),
+		attention_pooling_num_heads=config.get("attention_pooling_num_heads", 4),
 		
 		tuning_strategy=config.get("tuning_strategy", "soft_prompt"),
 		
@@ -121,6 +127,11 @@ class STRLengthModel(pl.LightningModule):
 
 		use_gradient_checkpointing: bool = False,
 		log_transform: bool = False,
+
+		head_hidden_layers = None,
+		head_dropout: float = 0.1,
+		use_attention_pooling: bool = False,
+		attention_pooling_num_heads: int = 4,
 	):
 		""" Initialize STRLengthModel.
 
@@ -148,32 +159,67 @@ class STRLengthModel(pl.LightningModule):
 		# Save hyperparameters
 		self.save_hyperparameters()
 
-		# Load heyenaDNA model for regression
-		self.model = AutoModelForSequenceClassification.from_pretrained(
+		# Load base heyenaDNA model
+		config = AutoConfig.from_pretrained(
 			hyenaDNA_checkpoint,
-			trust_remote_code=True,
-			num_labels=1  # Create new regression head
+			trust_remote_code=True
+		)
+		self.hidden_size = config.hidden_size
+		
+		self.backbone = AutoModel.from_pretrained(
+			hyenaDNA_checkpoint,
+			config=config,
+			trust_remote_code=True
 		)
 
 		# Enable gradient checkpointing for memory efficiency
 		if use_gradient_checkpointing:
-			self.model.gradient_checkpointing_enable()
+			self.backbone.gradient_checkpointing_enable()
 
 		# Add soft prompt tokens to embedding matrix
-		self.model.resize_token_embeddings(
+		self.backbone.resize_token_embeddings(
 			PROMPT_START_ID + n_prompt_tokens
 		)
 
+		# Set up attention pooling if specified
+		self.attn_pooling_layer = None
+		self.pooling_query = None
+		
+		if use_attention_pooling:
+			# Learnable Query Vector (1, 1, hidden_dim)
+			self.pooling_query = nn.Parameter(
+				torch.randn(1, 1, self.hidden_size)
+			)
+			self.attn_pooling_layer = nn.MultiheadAttention(
+				embed_dim=self.hidden_size,
+				num_heads=attention_pooling_num_heads,
+				batch_first=True
+			)
+
+		# Set up regression head
+		layers = []
+		input_dim = self.hidden_size
+		
+		if head_hidden_layers:
+			for hidden_dim in head_hidden_layers:
+				layers.append(nn.Linear(input_dim, hidden_dim))
+				layers.append(nn.ReLU())
+				layers.append(nn.Dropout(head_dropout))
+				input_dim = hidden_dim
+		
+		# Final projection to scalar
+		layers.append(nn.Linear(input_dim, 1))
+		self.head = nn.Sequential(*layers)
+
 		# Set gradient tracking based on tuning strategy
 		if self.hparams.tuning_strategy == "soft_prompt":
-
-			embed_param = self.model.get_input_embeddings().weight
 			
 			# Freeze all parameters in the backbone
-			for param in self.model.hyena.parameters():
+			for param in self.backbone.parameters():
 				param.requires_grad = False
 			
 			# Unfreeze the entire embedding parameter
+			embed_param = self.backbone.get_input_embeddings().weight
 			embed_param.requires_grad = True
 			
 			# And register a hook that will zero out the gradients
@@ -197,6 +243,7 @@ class STRLengthModel(pl.LightningModule):
 		self.loss_fn = nn.MSELoss()
 		
 		metrics = MetricCollection({
+			'mse': MeanSquaredError(),
 			'rmse': MeanSquaredError(squared=False),
 			'pearson': PearsonCorrCoef(),
 			'spearman': SpearmanCorrCoef(),
@@ -208,27 +255,45 @@ class STRLengthModel(pl.LightningModule):
 		self.test_metrics = metrics.clone(prefix='test_')
 
 	def forward(self, input_ids):
-		return self.model(input_ids=input_ids)
+		# Backbone Forward: last_hidden_state (Batch, SeqLen, Hidden)
+		outputs = self.backbone(input_ids=input_ids)
+		sequence_output = outputs.last_hidden_state
+
+		# Pooling
+		if self.hparams.use_attention_pooling:
+			batch_size = input_ids.shape[0]
+			# Expand query to batch size: (Batch, 1, Hidden)
+			query = self.pooling_query.expand(batch_size, -1, -1)
+			# Attend to sequence. Output: (Batch, 1, Hidden)
+			attn_output, _ = self.attn_pooling_layer(
+				query, sequence_output, sequence_output
+			)
+			pooled_output = attn_output.squeeze(1)
+		else:
+			# Mean Pooling: (Batch, Hidden)
+			pooled_output = torch.mean(sequence_output, dim=1)
+
+		# Output Head
+		logits = self.head(pooled_output)
+		return logits.squeeze(1)
 	
 	def train(self, mode: bool = True):
 		"""
 		Override the LightningModule.train() method to
 		keep the backbone in eval mode during soft-prompting.
 		"""
-		# Set the train mode for the whole module
-		# (this will put self.model.score in train mode)
 		super().train(mode)
 		
 		# If we are soft-prompting, force the backbone
 		# back into eval() mode to disable dropouts.
 		if self.hparams.tuning_strategy == "soft_prompt":
-			self.model.hyena.eval()
+			self.backbone.eval()
 
 	def _common_step(self, batch):
 		input_ids = batch["input_ids"]
-		labels = batch["label"] 
-		outputs = self(input_ids) 
-		logits = outputs.logits.squeeze(1)
+		labels = batch["label"]
+
+		logits = self(input_ids)
 
 		if self.hparams.log_transform:
 			optimization_targets = torch.log1p(labels)
@@ -308,19 +373,24 @@ class STRLengthModel(pl.LightningModule):
 			)
 
 		elif self.hparams.tuning_strategy == "full_finetune":
-			# Group 1 (High LR): The regression head
-			group1 = {
-				"params": self.model.score.parameters(),
-				"lr": self.hparams.lr
-			}
-			# Group 2 (Low LR): The entire backbone, including the
-			# pretrained prompt tokens (using soft_prompt strategy first)
-			group2 = {
-				"params": self.model.hyena.parameters(), 
-				"lr": self.hparams.backbone_lr
-			}
+			high_lr_params = list(self.head.parameters())
+			high_lr_params += list(self.backbone.get_input_embeddings().parameters())
+			
+			if self.hparams.use_attention_pooling:
+				high_lr_params.append(self.pooling_query)
+				high_lr_params += list(self.attn_pooling_layer.parameters())
+
+			high_lr_ids = {id(p) for p in high_lr_params}
+			backbone_params = []
+			for param in self.backbone.parameters():
+				if param.requires_grad and id(param) not in high_lr_ids:
+					backbone_params.append(param)
+			
 			optimizer = opt_class(
-				[group1, group2], 
+				[
+					{"params": high_lr_params, "lr": self.hparams.lr},
+					{"params": backbone_params, "lr": self.hparams.backbone_lr}
+				], 
 				weight_decay=self.hparams.weight_decay
 			)
 
