@@ -177,9 +177,28 @@ class STRLengthModel(pl.LightningModule):
 			self.hyena_model.gradient_checkpointing_enable()
 
 		# Resize Embeddings manually to add soft prompt tokens
-		self.hyena_model.resize_token_embeddings(
-			PROMPT_START_ID + n_prompt_tokens
+		old_embed = self.hyena_model.backbone.embeddings.word_embeddings
+		
+		# Sanity Check
+		assert old_embed.embedding_dim == self.hidden_size, \
+			f"Dim mismatch: {old_embed.embedding_dim} vs {self.hidden_size}"
+
+		new_num_tokens = PROMPT_START_ID + n_prompt_tokens
+		new_embed = nn.Embedding(
+			new_num_tokens, self.hidden_size, padding_idx=old_embed.padding_idx
 		)
+		
+		# Copy weights
+		with torch.no_grad():
+			new_embed.weight[:old_embed.num_embeddings] = old_embed.weight
+		
+		# Overwrite in hierarchy
+		self.hyena_model.backbone.embeddings.word_embeddings = new_embed
+		self.hyena_model.config.vocab_size = new_num_tokens
+		self.hyena_model.backbone.config.vocab_size = new_num_tokens
+
+		# Verify resize
+		assert self.hyena_model.backbone.embeddings.word_embeddings.weight.shape == (new_num_tokens, self.hidden_size)
 
 		# Set up attention pooling if specified
 		self.attn_pooling_layer = None
