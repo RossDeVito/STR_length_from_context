@@ -273,8 +273,8 @@ class STRLengthModel(pl.LightningModule):
 		self.test_metrics = metrics.clone(prefix='test_')
 
 	def forward(self, input_ids):
-		# Backbone Forward: last_hidden_state (Batch, SeqLen, Hidden)
-		outputs = self.backbone(input_ids=input_ids)
+		# hyena_model Forward: last_hidden_state (Batch, SeqLen, Hidden)
+		outputs = self.hyena_model(input_ids=input_ids)
 		sequence_output = outputs.last_hidden_state
 
 		# Pooling
@@ -305,7 +305,7 @@ class STRLengthModel(pl.LightningModule):
 		# If we are soft-prompting, force the backbone
 		# back into eval() mode to disable dropouts.
 		if self.hparams.tuning_strategy == "soft_prompt":
-			self.backbone.eval()
+			self.hyena_model.eval()
 
 	def _common_step(self, batch):
 		input_ids = batch["input_ids"]
@@ -395,7 +395,7 @@ class STRLengthModel(pl.LightningModule):
 			high_lr_params += list(self.hyena_model.backbone.embeddings.word_embeddings.parameters())
 			
 			if self.hparams.use_attention_pooling:
-				high_lr_params.append(self.pooling_query.parameters())
+				high_lr_params.append(self.pooling_query)
 				high_lr_params += list(self.attn_pooling_layer.parameters())
 
 			high_lr_ids = {id(p) for p in high_lr_params}
