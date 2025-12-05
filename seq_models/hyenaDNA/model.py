@@ -166,7 +166,7 @@ class STRLengthModel(pl.LightningModule):
 		)
 		self.hidden_size = config.d_model
 		
-		self.backbone = AutoModel.from_pretrained(
+		self.hyena_model = AutoModel.from_pretrained(
 			hyenaDNA_checkpoint,
 			config=config,
 			trust_remote_code=True
@@ -174,30 +174,12 @@ class STRLengthModel(pl.LightningModule):
 
 		# Enable gradient checkpointing for memory efficiency
 		if use_gradient_checkpointing:
-			self.backbone.gradient_checkpointing_enable()
+			self.hyena_model.gradient_checkpointing_enable()
 
 		# Resize Embeddings manually to add soft prompt tokens
-		old_embed = self.backbone.embeddings.word_embeddings
-
-		assert old_embed.embedding_dim == self.hidden_size, \
-			f"Old embed dim {old_embed.embedding_dim} != hidden size {self.hidden_size}"
-		
-		new_num_tokens = PROMPT_START_ID + n_prompt_tokens
-		new_embed = nn.Embedding(
-			new_num_tokens, self.hidden_size, padding_idx=old_embed.padding_idx
+		self.hyena_model.resize_token_embeddings(
+			PROMPT_START_ID + n_prompt_tokens
 		)
-		
-		# Copy weights
-		with torch.no_grad():
-			new_embed.weight[:old_embed.num_embeddings] = old_embed.weight
-		
-		# Overwrite in backbone
-		self.backbone.embeddings.word_embeddings = new_embed
-		self.backbone.config.vocab_size = new_num_tokens
-
-		assert self.backbone.embeddings.word_embeddings.weight.shape == (new_num_tokens, self.hidden_size), \
-			f"Resize failed. Expected ({new_num_tokens}, {self.hidden_size}), " \
-			f"got {self.backbone.embeddings.word_embeddings.weight.shape}"
 
 		# Set up attention pooling if specified
 		self.attn_pooling_layer = None
@@ -233,11 +215,11 @@ class STRLengthModel(pl.LightningModule):
 		if self.hparams.tuning_strategy == "soft_prompt":
 			
 			# Freeze all parameters in the backbone
-			for param in self.backbone.parameters():
+			for param in self.hyena_model.parameters():
 				param.requires_grad = False
 			
 			# Unfreeze the entire embedding parameter
-			embed_param = self.backbone.get_input_embeddings().weight
+			embed_param = self.hyena_model.get_input_embeddings().weight
 			embed_param.requires_grad = True
 			
 			# And register a hook that will zero out the gradients
@@ -392,15 +374,15 @@ class STRLengthModel(pl.LightningModule):
 
 		elif self.hparams.tuning_strategy == "full_finetune":
 			high_lr_params = list(self.head.parameters())
-			high_lr_params += list(self.backbone.get_input_embeddings().parameters())
+			high_lr_params += list(self.hyena_model.get_input_embeddings().parameters())
 			
 			if self.hparams.use_attention_pooling:
-				high_lr_params.append(self.pooling_query)
+				high_lr_params.append(self.pohyena_modeloling_query)
 				high_lr_params += list(self.attn_pooling_layer.parameters())
 
 			high_lr_ids = {id(p) for p in high_lr_params}
 			backbone_params = []
-			for param in self.backbone.parameters():
+			for param in self.hyena_model.parameters():
 				if param.requires_grad and id(param) not in high_lr_ids:
 					backbone_params.append(param)
 			
