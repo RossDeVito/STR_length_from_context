@@ -164,7 +164,7 @@ class STRLengthModel(pl.LightningModule):
 			hyenaDNA_checkpoint,
 			trust_remote_code=True
 		)
-		self.hidden_size = config.hidden_size
+		self.hidden_size = config.d_model
 		
 		self.backbone = AutoModel.from_pretrained(
 			hyenaDNA_checkpoint,
