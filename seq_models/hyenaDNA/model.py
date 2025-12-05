@@ -176,10 +176,28 @@ class STRLengthModel(pl.LightningModule):
 		if use_gradient_checkpointing:
 			self.backbone.gradient_checkpointing_enable()
 
-		# Add soft prompt tokens to embedding matrix
-		self.backbone.resize_token_embeddings(
-			PROMPT_START_ID + n_prompt_tokens
+		# Resize Embeddings manually to add soft prompt tokens
+		old_embed = self.backbone.embeddings.word_embeddings
+
+		assert old_embed.embedding_dim == self.hidden_size, \
+			f"Old embed dim {old_embed.embedding_dim} != hidden size {self.hidden_size}"
+		
+		new_num_tokens = PROMPT_START_ID + n_prompt_tokens
+		new_embed = nn.Embedding(
+			new_num_tokens, self.hidden_size, padding_idx=old_embed.padding_idx
 		)
+		
+		# Copy weights
+		with torch.no_grad():
+			new_embed.weight[:old_embed.num_embeddings] = old_embed.weight
+		
+		# Overwrite in backbone
+		self.backbone.embeddings.word_embeddings = new_embed
+		self.backbone.config.vocab_size = new_num_tokens
+
+		assert self.backbone.embeddings.word_embeddings.weight.shape == (new_num_tokens, self.hidden_size), \
+			f"Resize failed. Expected ({new_num_tokens}, {self.hidden_size}), " \
+			f"got {self.backbone.embeddings.word_embeddings.weight.shape}"
 
 		# Set up attention pooling if specified
 		self.attn_pooling_layer = None
