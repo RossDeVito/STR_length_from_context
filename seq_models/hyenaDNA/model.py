@@ -10,6 +10,7 @@ create_model() can be used to create the model from a config dict.
 
 import datetime
 
+from networkx import config
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -34,7 +35,9 @@ def create_model(config):
 
 	Required config keys:
 		hyenaDNA_checkpoint (str): HF checkpoint for the HyenaDNA model.
-		n_prompt_tokens (int): The number of soft prompt tokens to add.
+		n_prefix_prompt_tokens (int): Number of prompt tokens before the
+			sequence.
+		n_str_prompt_tokens (int): Number of prompt tokens in the STR gap.
 		n_flanking_bp (int): Number of flanking base pairs to include on
 			each side of the STR. Used to verify model can handle input length.
 		n_str_bp (int): Number of base pairs of the STR to include on
@@ -43,7 +46,7 @@ def create_model(config):
 	Optional config keys:
 		tuning_strategy (str): 'soft_prompt' or 'full_finetune'.
 			Default: 'soft_prompt'.
-		
+		log_transform (bool): Whether to log-transform the target lengths.
 		optimizer_name (str): 'Adam' or 'AdamW'. Default: 'AdamW'.
 		lr (float): Learning rate for new components (head, prompt). Default: 1e-4.
 		backbone_lr (float): Learning rate for the pretrained backbone. Default: 1e-5.
@@ -58,11 +61,27 @@ def create_model(config):
 		use_gradient_checkpointing (bool): Whether to use gradient checkpointing.
 			Default: False.
 	"""
+
+	has_legacy = "n_prompt_tokens" in config
+	has_new = "n_prefix_prompt_tokens" in config or "n_str_prompt_tokens" in config
+
+	n_prefix = 0
+	n_str = 0
+
+	if has_new:
+		n_prefix = config.get("n_prefix_prompt_tokens", 0)
+		n_str = config.get("n_str_prompt_tokens", 0)
+	elif has_legacy:
+		# Legacy behavior: all tokens go into the STR gap
+		n_str = config["n_prompt_tokens"]
+		n_prefix = 0
+		
 	# Verify that the model can handle the input length
 	total_input_length = (
 		config["n_flanking_bp"] * 2
-		+ config["n_str_bp"] * 2
-		+ config["n_prompt_tokens"]
+        + config["n_str_bp"] * 2
+        + n_prefix
+        + n_str
 	)
 	
 	if config["hyenaDNA_checkpoint"] not in MAX_SEQ_LENGTH.keys():
@@ -77,7 +96,8 @@ def create_model(config):
 
 	return STRLengthModel(
 		hyenaDNA_checkpoint=config["hyenaDNA_checkpoint"],
-		n_prompt_tokens=config["n_prompt_tokens"],
+		n_prefix_prompt_tokens=n_prefix,
+        n_str_prompt_tokens=n_str,
 		log_transform=config.get("log_transform", False),
 
 		head_hidden_layers=config.get("head_hidden_layers", None), # e.g. [128, 64]
@@ -110,7 +130,8 @@ class STRLengthModel(pl.LightningModule):
 		self,
 		# Model
 		hyenaDNA_checkpoint: str,
-		n_prompt_tokens: int,
+		n_prefix_prompt_tokens: int,
+        n_str_prompt_tokens: int,
 		tuning_strategy: str,
 		
 		# Optimizer
@@ -139,7 +160,10 @@ class STRLengthModel(pl.LightningModule):
 
 		Args:
 			model_checkpoint (str): HF checkpoint name.
-			n_prompt_tokens (int): Number of soft prompt tokens.
+			n_prefix_prompt_tokens (int): Number of soft prompt tokens at
+				the start.
+			n_str_prompt_tokens (int): Number of soft prompt tokens in the
+				STR gap.
 			tuning_strategy (str): 'soft_prompt' or 'full_finetune'.
 			
 			optimizer_name (str): 'Adam', 'AdamW', etc.
@@ -183,7 +207,9 @@ class STRLengthModel(pl.LightningModule):
 		assert old_embed.embedding_dim == self.hidden_size, \
 			f"Dim mismatch: {old_embed.embedding_dim} vs {self.hidden_size}"
 
-		new_num_tokens = PROMPT_START_ID + n_prompt_tokens
+		n_total_prompt_tokens = n_prefix_prompt_tokens + n_str_prompt_tokens
+		new_num_tokens = PROMPT_START_ID + n_total_prompt_tokens
+	
 		new_embed = nn.Embedding(
 			new_num_tokens, self.hidden_size, padding_idx=old_embed.padding_idx
 		)

@@ -42,13 +42,43 @@ def create_data_module(config):
 			on each side of the STR.
 		n_str_bp (int): Number of base pairs of the STR to include
 			on each side of the STR.
-		n_prompt_tokens (int): Number of soft prompt tokens to use. Will
-			be placed in the middle of the STR.
+
+	Prompt token config keys:
+		Just in STR gap:
+			n_prompt_tokens (int): Tokens inserted in the STR gap.
+		Before sequence and in STR gap:
+			n_prefix_prompt_tokens (int): Tokens inserted at sequence start.
+			n_str_prompt_tokens (int): Tokens inserted in the STR gap.
 	
 	Optional config keys:
 		dataloader_num_workers (int): Number of workers for data loaders.
 			Default: 4.
 	"""
+
+	# Handle both prompt token strategies
+
+	has_legacy = "n_prompt_tokens" in config
+	has_new = "n_prefix_prompt_tokens" in config or "n_str_prompt_tokens" in config
+
+	n_prefix_tokens = 0
+	n_str_tokens = 0
+
+	if has_new:
+		if has_legacy:
+			raise Warning(
+				"Config contains both 'n_prompt_tokens' (legacy) and "
+				"'n_prefix/str_prompt_tokens' (new). Ignoring legacy arg "
+				"and using specific counts."
+			)
+		n_prefix_tokens = config.get("n_prefix_prompt_tokens", 0)
+		n_str_tokens = config.get("n_str_prompt_tokens", 0)
+	elif has_legacy:
+		# Legacy behavior: all tokens go into the STR gap
+		n_str_tokens = config["n_prompt_tokens"]
+		n_prefix_tokens = 0
+	else:
+		# Default case if neither are provided (e.g. 0 prompts)
+		pass
 
 	return STRLengthDataModule(
 		data_path=config["data_path"],
@@ -57,7 +87,8 @@ def create_data_module(config):
 		batch_size=config["batch_size"],
 		n_flanking_bp=config["n_flanking_bp"],
 		n_str_bp=config["n_str_bp"],
-		n_prompt_tokens=config["n_prompt_tokens"],
+		n_prefix_prompt_tokens=n_prefix_tokens,
+        n_str_prompt_tokens=n_str_tokens,
 		num_workers=config.get("dataloader_num_workers", 4),
 	)
 
@@ -73,8 +104,8 @@ class STRLengthDataset(Dataset):
 			each side of the STR.
 		n_str_bp (int): Number of base pairs of the STR to include on
 			each side of the STR.
-		n_prompt_tokens (int): Number of soft prompt tokens to use. Will
-			be placed in the middle of the STR.
+		n_prefix_prompt_tokens (int): Number of soft prompt tokens at start.
+        n_str_prompt_tokens (int): Number of soft prompt tokens in STR gap.
 		prompt_token_ids (torch.Tensor): Tensor of prompt token IDs.
 	"""
 
@@ -85,7 +116,8 @@ class STRLengthDataset(Dataset):
 		tokenizer,
 		n_flanking_bp,
 		n_str_bp,
-		n_prompt_tokens,
+		n_prefix_prompt_tokens,
+        n_str_prompt_tokens,
 	):
 		"""Initialize dataset.
 		
@@ -97,8 +129,8 @@ class STRLengthDataset(Dataset):
 				each side of the STR.
 			n_str_bp (int): Number of base pairs of the STR to include on
 				each side of the STR.
-			n_prompt_tokens (int): Number of soft prompt tokens to use. Will
-				be placed in the middle of the STR.
+			n_prefix_prompt_tokens (int): Number of soft prompt tokens at start.
+			n_str_prompt_tokens (int): Number of soft prompt tokens in STR gap.
 		"""
 		
 		self.str_df = str_df.reset_index(drop=True)
@@ -106,17 +138,21 @@ class STRLengthDataset(Dataset):
 		self.tokenizer = tokenizer
 		self.n_flanking_bp = n_flanking_bp
 		self.n_str_bp = n_str_bp
-		self.n_prompt_tokens = n_prompt_tokens
+		self.n_prefix_prompt_tokens = n_prefix_prompt_tokens
+		self.n_str_prompt_tokens = n_str_prompt_tokens
 
 		# Do NOT initialize Fasta here. 
 		# It breaks pickling for num_workers > 0.
 		self.ref_genome = None
 
 		# Create prompt token IDs
-		self.prompt_token_ids = torch.arange(
+		all_prompt_ids = torch.arange(
 			PROMPT_START_ID,
-			PROMPT_START_ID + n_prompt_tokens
+			PROMPT_START_ID + n_prefix_prompt_tokens + n_str_prompt_tokens,
 		)
+
+		self.prefix_prompt_ids = all_prompt_ids[:n_prefix_prompt_tokens]
+		self.str_prompt_ids = all_prompt_ids[n_prefix_prompt_tokens:]
 
 		self.validity_check()
 
@@ -200,8 +236,9 @@ class STRLengthDataset(Dataset):
 		return {
 			"input_ids": torch.cat(
 				[
+					self.prefix_prompt_ids,
 					start_tokens,
-					self.prompt_token_ids,
+					self.str_prompt_ids,
 					end_tokens
 				],
 				dim=0
@@ -224,7 +261,8 @@ class STRLengthDataModule(pl.LightningDataModule):
 		batch_size,
 		n_flanking_bp,
 		n_str_bp,
-		n_prompt_tokens,
+		n_prefix_prompt_tokens,
+		n_str_prompt_tokens,
 		num_workers=4,
 	):
 		super().__init__()
@@ -255,7 +293,8 @@ class STRLengthDataModule(pl.LightningDataModule):
 			"tokenizer": self.tokenizer,
 			"n_flanking_bp": self.hparams.n_flanking_bp,
 			"n_str_bp": self.hparams.n_str_bp,
-			"n_prompt_tokens": self.hparams.n_prompt_tokens,
+			"n_prefix_prompt_tokens": self.hparams.n_prefix_prompt_tokens,
+			"n_str_prompt_tokens": self.hparams.n_str_prompt_tokens,
 		}
 
 		self.train_dataset = STRLengthDataset(train_df, **dataset_args)
