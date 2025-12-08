@@ -98,6 +98,7 @@ def create_model(config):
 		hyenaDNA_checkpoint=config["hyenaDNA_checkpoint"],
 		n_prefix_prompt_tokens=n_prefix,
         n_str_prompt_tokens=n_str,
+		n_prompt_tokens=None,
 		log_transform=config.get("log_transform", False),
 
 		head_hidden_layers=config.get("head_hidden_layers", None), # e.g. [128, 64]
@@ -130,8 +131,6 @@ class STRLengthModel(pl.LightningModule):
 		self,
 		# Model
 		hyenaDNA_checkpoint: str,
-		n_prefix_prompt_tokens: int,
-        n_str_prompt_tokens: int,
 		tuning_strategy: str,
 		
 		# Optimizer
@@ -153,6 +152,10 @@ class STRLengthModel(pl.LightningModule):
 		head_dropout: float = 0.1,
 		use_attention_pooling: bool = False,
 		attention_pooling_num_heads: int = 4,
+
+		n_prefix_prompt_tokens: int = 0,
+		n_str_prompt_tokens: int = 0,
+		n_prompt_tokens: int = None,	# Here for backwards compatibility
 	):
 		""" Initialize STRLengthModel.
 
@@ -183,6 +186,15 @@ class STRLengthModel(pl.LightningModule):
 		# Save hyperparameters
 		self.save_hyperparameters()
 
+		if n_prompt_tokens is not None and (n_prefix_prompt_tokens == 0 and n_str_prompt_tokens == 0):
+			# Map legacy single-arg to the "STR Gap" prompt location
+			self.n_prefix_tokens = 0
+			self.n_str_tokens = n_prompt_tokens
+		else:
+			# Use new explicit args
+			self.n_prefix_tokens = n_prefix_prompt_tokens
+			self.n_str_tokens = n_str_prompt_tokens
+
 		# Load base heyenaDNA model
 		config = AutoConfig.from_pretrained(
 			hyenaDNA_checkpoint,
@@ -207,7 +219,7 @@ class STRLengthModel(pl.LightningModule):
 		assert old_embed.embedding_dim == self.hidden_size, \
 			f"Dim mismatch: {old_embed.embedding_dim} vs {self.hidden_size}"
 
-		n_total_prompt_tokens = n_prefix_prompt_tokens + n_str_prompt_tokens
+		n_total_prompt_tokens = self.n_prefix_tokens + self.n_str_tokens
 		new_num_tokens = PROMPT_START_ID + n_total_prompt_tokens
 	
 		new_embed = nn.Embedding(
@@ -391,15 +403,25 @@ class STRLengthModel(pl.LightningModule):
 		self.log_dict(self.test_metrics, on_step=False, on_epoch=True)
 
 	def predict_step(self, batch, batch_idx, dataloader_idx=0):
-		"""Returns predictions in real units (base pairs)."""
+		"""Returns predictions and true labels.
+		
+		Returns:
+			dict: {'preds': tensor, 'labels': tensor}
+		"""
 		input_ids = batch["input_ids"]
-		outputs = self(input_ids)
-		logits = outputs.logits.squeeze(1)
+		labels = batch["label"]
+		
+		logits = self(input_ids)
 		
 		if self.hparams.log_transform:
-			return torch.expm1(logits)
+			preds = torch.expm1(logits)
 		else:
-			return logits
+			preds = logits
+			
+		return {
+			"preds": preds,
+			"labels": labels
+		}
 
 	def configure_optimizers(self):
 		

@@ -11,6 +11,9 @@ tscc_cmds.md
 **/training/output/
 **/training/dev1.py
 
+# Predictions
+**/eval/predictions/
+
 # Ref genome files
 **/reference_genome/*.fa
 **/reference_genome/*.fai
