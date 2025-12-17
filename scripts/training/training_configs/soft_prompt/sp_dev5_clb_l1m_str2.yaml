@@ -1,18 +1,18 @@
 # --- Paths ---
 data_path: "data/STR_data/reference_based_labeled_strs/str_len_2_max_cn_perc_0.975_n_flanking_250000.tsv"
 ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
-experiment_name: "str2/dev/dev5_m450"
+experiment_name: "str2/dev/dev5_l1m_cl8kb"
 
 # --- Data Params (from data.py) ---
-batch_size: 32
-accumulate_grad_batches: 8
+batch_size: 16
+accumulate_grad_batches: 16
 num_workers: 4
 n_flanking_bp: 8000
 n_str_bp: 8
 log_transform: False
 
 # --- Model Params (from model.py) ---
-hyenaDNA_checkpoint: "LongSafari/hyenadna-medium-450k-seqlen-hf"
+hyenaDNA_checkpoint: "LongSafari/hyenadna-large-1m-seqlen-hf"
 n_prefix_prompt_tokens: 128
 n_str_prompt_tokens: 128
 
