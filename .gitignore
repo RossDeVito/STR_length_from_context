@@ -1,11 +1,16 @@
 # Repo specific
 
+TODO.md
+
 expanse_cmds.md
 tscc_cmds.md
 
 # STR data files
 **/STR_data/**/*.bed
 **/STR_data/**/*.tsv
+
+# Invalid regions
+**/data/invalid_regions/**.bed.gz
 
 # Training output
 **/training/output/
