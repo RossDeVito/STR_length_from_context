@@ -29,6 +29,7 @@ do
 
 	# Filter STRs
 	echo "Filtering STRs to remove those overlapping invalid regions..."
+	mkdir -p ../STR_data/filtered_labeled_strs
 	python remove_invalid_region_strs.py \
 		--str_file "${LOG_DIR}/str_len_${STR_LEN}_max_cn_perc_${MAX_PERCENTILE}_n_flanking_${N_FLANKING}.tsv" \
 		| tee "../STR_data/filtered_labeled_strs/str_len_${STR_LEN}_max_cn_perc_${MAX_PERCENTILE}_n_flanking_${N_FLANKING}_filtered.log"
