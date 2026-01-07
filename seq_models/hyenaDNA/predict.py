@@ -10,6 +10,7 @@ Args:
 	batch_size: Batch size for evaluation. Default: use config value.
 	cpu: Force CPU usage.
 	output_dir: Directory to save evaluation results.
+	dev: If flag is set, only predicts for 1000 examples.
 """
 
 import argparse
@@ -17,6 +18,7 @@ import os
 import yaml
 import torch
 import pandas as pd
+import numpy as np
 import pytorch_lightning as pl
 
 from seq_models.hyenaDNA.model import STRLengthModel
@@ -58,7 +60,20 @@ def parse_args():
 			"Directory to save evaluation results."
 		)
 	)
+	parser.add_argument(
+		"--dev",
+		action="store_true",
+		help="If flag is set, just predicts for 2 batches for quick dev run."
+	)
 	return parser.parse_args()
+
+
+def create_small_dev_set(data_module, n_samples=1000):
+	""" Create a small dev set for quick testing. """
+	
+	data_module.train_dataset.str_df = data_module.train_dataset.str_df[:n_samples]
+	data_module.val_dataset.str_df = data_module.val_dataset.str_df[:n_samples]
+	data_module.test_dataset.str_df = data_module.test_dataset.str_df[:n_samples]
 
 
 if __name__ == "__main__":
@@ -66,6 +81,8 @@ if __name__ == "__main__":
 	__spec__ = None
 
 	args = parse_args()
+	if args.dev:
+		print("DEV MODE: Using first 1000 samples for quick testing.")
 
 	# Load config
 	config_path = os.path.join(args.model_dir, "config.yaml")
@@ -77,21 +94,29 @@ if __name__ == "__main__":
 	if args.batch_size is not None:
 		config['batch_size'] = args.batch_size
 
-	# Create data loader
+	# Create data loader and get underlying dataframe
 	data_module = create_data_module(config)
 	
 	if args.split == "test":
 		data_module.setup(stage="test")
+		if args.dev:
+			create_small_dev_set(data_module, n_samples=1000)
 		data_loader = data_module.test_dataloader()
+		source_df = data_module.test_dataset.str_df
 	elif args.split == "val":
 		data_module.setup(stage="validate")
+		if args.dev:
+			create_small_dev_set(data_module, n_samples=1000)
 		data_loader = data_module.val_dataloader()
+		source_df = data_module.val_dataset.str_df
 	elif args.split == "train":
 		data_module.setup(stage="train")
+		if args.dev:
+			create_small_dev_set(data_module, n_samples=1000)
 		data_loader = data_module.train_dataloader()
+		source_df = data_module.train_dataset.str_df
 	else:
 		raise ValueError(f"Invalid split: {args.split}. Must be one of 'test', 'val', 'train'.")
-	
 
 	# Load model from checkpoint
 	# Find checkpoint file in model_dir/checkpoints/*.ckpt
@@ -146,17 +171,21 @@ if __name__ == "__main__":
 		all_pred.extend(pred_lengths.tolist())
 		all_true.extend(true_lengths.tolist())
 
-	df = pd.DataFrame({
-		"true_length": all_true,
-		"pred_length": all_pred
-	})
+	source_df['pred_length'] = all_pred
+	source_df['true_length'] = all_true
 
+	# check that lengths match
+	if not np.all(source_df['true_length'] == source_df['copy_number']):
+		raise ValueError("Mismatch between predictions and STR info.")
 
 	# Create output directory
 	os.makedirs(args.output_dir, exist_ok=True)
 
-	output_filename = f"predictions_{args.split}.tsv"
+	output_filename = f"predictions_{args.split}"
+	if args.dev:
+		output_filename += "_dev"
+	output_filename += ".tsv"
 	output_path = os.path.join(args.output_dir, output_filename)
 	
-	print(f"Saving {len(df)} predictions to {output_path}")
-	df.to_csv(output_path, sep="\t", index=False)
+	print(f"Saving {len(source_df)} predictions to {output_path}")
+	source_df.to_csv(output_path, sep="\t", index=False)
