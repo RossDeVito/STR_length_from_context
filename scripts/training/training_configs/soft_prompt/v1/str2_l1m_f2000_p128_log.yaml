@@ -1,0 +1,42 @@
+# --- Paths ---
+data_path: "data/STR_data/filtered_labeled_strs/str_len_2_max_cn_perc_0.975_n_flanking_10000_filtered.tsv"
+ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
+experiment_name: "str2/v1/str2_l1m_f2000_p128_log"
+
+# --- Data Params (from data.py) ---
+batch_size: 32
+accumulate_grad_batches: 8
+num_workers: 4
+n_flanking_bp: 2000
+n_str_bp: 8
+log_transform: True
+
+# --- Model Params (from model.py) ---
+hyenaDNA_checkpoint: "LongSafari/hyenadna-large-1m-seqlen-hf"
+n_prefix_prompt_tokens: 128
+n_str_prompt_tokens: 128
+
+head_hidden_layers: [256, 128] 
+head_dropout: 0.1
+
+use_attention_pooling: True
+attention_pooling_num_heads: 4
+
+# --- Strategy: This is the key for this run ---
+tuning_strategy: "soft_prompt"
+
+# --- Optimizer ---
+optimizer_name: "Adam"
+lr: 1e-3
+weight_decay: 0.0
+
+# --- Scheduler ---
+scheduler_name: "ReduceLROnPlateau"
+scheduler_patience: 5
+scheduler_factor: 0.5
+
+# --- Trainer Params ---
+max_epochs: 200
+patience_early_stopping: 20
+gradient_clip_val: 1.0
+precision: "bf16-mixed"
