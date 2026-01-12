@@ -97,6 +97,7 @@ if __name__ == "__main__":
 		monitor="val_loss",
 		mode="min",
 		save_top_k=1,
+		save_last=True,
 		verbose=True
 	)
 
