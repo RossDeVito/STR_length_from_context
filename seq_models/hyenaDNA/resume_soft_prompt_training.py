@@ -139,13 +139,14 @@ if __name__ == "__main__":
 		# Map location CPU to avoid loading model to GPU just to read header
 		checkpoint_header = torch.load(ckpt_path, map_location="cpu")
 		resume_step = checkpoint_header.get('global_step', 0)
-		print(f"Checkpoint global_step detected: {resume_step}")
+		resume_epoch = checkpoint_header.get('epoch', 0)
+		print(f"Checkpoint detected: Epoch {resume_epoch} | Global Step {resume_step}")
 	except Exception as e:
 		raise RuntimeError(f"Failed to read checkpoint header: {e}")
 
 	# Create new experiment directory
 	old_exp_name = os.path.basename(os.path.normpath(args.resume_dir))
-	new_exp_name = f"{old_exp_name}_resumed_step{resume_step}"
+	new_exp_name = f"{old_exp_name}_resumed_epoch{resume_epoch}"
 	
 	new_experiment_path = os.path.join(args.output_dir, new_exp_name)
 	os.makedirs(new_experiment_path, exist_ok=True)
