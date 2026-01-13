@@ -4,8 +4,8 @@ ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hl
 experiment_name: "str2/v1/str2_l1m_f8000_p128_log"
 
 # --- Data Params (from data.py) ---
-batch_size: 32
-accumulate_grad_batches: 8
+batch_size: 16
+accumulate_grad_batches: 16
 num_workers: 4
 n_flanking_bp: 8000
 n_str_bp: 8
