@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH --job-name=hyena_sp_train_a100
+#SBATCH --partition=hotel-gpu
+#SBATCH --qos=hotel-gpu
+#SBATCH --account=htl149
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:a100:1
+#SBATCH --mem=50G
+#SBATCH --time=48:00:00
+#SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/sp_train_%j.out
+#SBATCH --error=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/sp_train_%j.err
+
+# Argument Parsing
+RESUME_DIR=$1
+
+if [ -z "$RESUME_DIR" ]; then
+    echo "Error: No resume directory provided."
+    echo "Usage: sbatch submit_resume_sp_training_a100.sb resume_directory"
+    exit 1
+fi
+
+echo "Job $SLURM_JOB_ID started on $(hostname) at $(date)"
+echo "Resuming training from directory: $RESUME_DIR"
+
+# Navigate to your project root
+PROJECT_ROOT="/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context/"
+cd "$PROJECT_ROOT" || exit 1
+
+# Activate Environment
+source ~/.bashrc
+conda activate str_len_pred_gpu
+
+# Run wrapper script
+./scripts/training/resume_soft_prompt_training.sh "$RESUME_DIR"
+
+echo "Job finished at $(date)"

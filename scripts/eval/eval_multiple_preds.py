@@ -32,13 +32,9 @@ def get_metrics(pred, true):
 
 if __name__ == '__main__':
 
-	pred_dir = "predictions/soft_prompt/str2/tscc_dev"
+	pred_dir = "predictions/soft_prompt/str2/tscc_v1"
 	model_names = [
-		"dev4Lb_2025-12-05_11-14-13",
-		"dev4Lb_m450_2025-12-06_16-44-44",
-		"dev5_m450_2025-12-08_02-35-32",
-		"dev5L_l1m_2025-12-08_00-22-52",
-		"dev5L_m450_2025-12-07_21-46-02",
+		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
 	]
 
 	results = []
