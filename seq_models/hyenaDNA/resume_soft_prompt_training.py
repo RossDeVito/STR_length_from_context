@@ -26,6 +26,7 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import TensorBoardLogger
 import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
 from tensorboard.compat.proto import event_pb2
 
 from seq_models.hyenaDNA.model import create_model
