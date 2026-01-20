@@ -44,6 +44,7 @@ if __name__ == '__main__':
 	pred_dir = "predictions/soft_prompt/str2/tscc_v1"
 	model_names = [
 		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
+		"str2_l1m_f1000_p128_log_2026-01-14_15-46-56",
 		"str2_l1m_f2000_p128_log_2026-01-12_13-28-53",
 	]
 

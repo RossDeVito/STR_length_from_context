@@ -15,6 +15,7 @@ Usage:
 import argparse
 import os
 import shutil
+import time
 import glob
 import yaml
 import torch
@@ -55,10 +56,9 @@ def find_resume_checkpoint(resume_dir):
 
 def clean_and_copy_logs(old_dir, new_dir, resume_step):
 	"""
-	Reads event logs from old_dir, filters out events >= resume_step,
-	and writes the clean history to new_dir.
+	Reads old logs, filters them, and TIME-SHIFTS them to end at 'now'.
 	"""
-	print(f"   > Attempting to unify logs (Cutoff step: {resume_step})...")
+	print(f"   > Processing logs (Cutoff step: {resume_step})...")
 	
 	files = glob.glob(os.path.join(old_dir, "events.out.tfevents*"))
 	if not files:
@@ -69,33 +69,48 @@ def clean_and_copy_logs(old_dir, new_dir, resume_step):
 	files.sort(key=os.path.getmtime)
 	old_file_path = files[-1]
 
-	# Setup Writer in new dir
-	# filename_suffix ensures the file is distinct from the new training logs
-	# TensorBoard will read this file first (due to timestamp) then the new one.
-	writer = tf.summary.create_file_writer(new_dir, filename_suffix=".history_cleaned")
+	# 1. Read Valid Events into Memory
+	# We need to read them all first to find the timestamp of the LAST event
+	valid_events = []
+	try:
+		for e in tf.compat.v1.train.summary_iterator(old_file_path):
+			if e.step < resume_step:
+				valid_events.append(e)
+	except Exception as e:
+		raise RuntimeError(f"Failed to parse old logs: {e}")
 
-	total_events = 0
-	kept_events = 0
+	if not valid_events:
+		print("   > Warning: No valid events found before resume step.")
+		return
 
-	with writer.as_default():
-		try:
-			# Iterate raw events using TF's iterator
-			for e in tf.compat.v1.train.summary_iterator(old_file_path):
-				total_events += 1
-				
-				# Keep metadata (step 0) and any steps strictly before resume
-				if e.step < resume_step:
-					if e.HasField('summary'):
-						for value in e.summary.value:
-							if value.HasField('simple_value'):
-								tf.summary.scalar(value.tag, value.simple_value, step=e.step)
-					kept_events += 1
-		except Exception as e:
-			raise RuntimeError(f"Failed to parse old logs: {e}")
+	# 2. Calculate Time Shift
+	# Goal: Shift history so the LAST event happens 'now' (minus 1 second buffer)
+	# This closes the gap in TensorBoard "Relative Time".
+	last_old_time = valid_events[-1].wall_time
+	current_time = time.time()
 	
-	writer.close()
-	print(f"   > Log unification complete.")
-	print(f"   > Processed {total_events} events. Kept {kept_events} (Dropped {total_events - kept_events} orphaned steps).")
+	# Shift = Now - Old_End. 
+	# Adding this shift to Start_Old makes it look like it started (Duration) ago.
+	time_shift = current_time - last_old_time - 1.0 
+
+	print(f"   > Applying time shift of {time_shift/3600:.2f} hours to close the gap.")
+
+	# 3. Write Time-Shifted Events
+	unified_filename = "events.out.tfevents.history_cleaned"
+	output_path = os.path.join(new_dir, unified_filename)
+
+	total_written = 0
+	
+	with tf.io.TFRecordWriter(output_path) as writer:
+		for e in valid_events:
+			# Update wall_time
+			e.wall_time += time_shift
+			
+			# Write the modified event object (must reserialize)
+			writer.write(e.SerializeToString())
+			total_written += 1
+
+	print(f"   > Log unification complete. {total_written} events preserved.")
 
 
 def parse_args():
