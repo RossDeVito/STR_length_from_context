@@ -12,7 +12,7 @@ from matplotlib.colors import LogNorm
 
 def get_metrics(pred, true):
 	mse = sk_metrics.mean_squared_error(true, pred)
-	rmse = np.sqrt(mse)
+	mape = sk_metrics.mean_absolute_percentage_error(true, pred)
 	mae = sk_metrics.mean_absolute_error(true, pred)
 	r2 = sk_metrics.r2_score(true, pred)
 	pearson_r, pearson_p = stats.pearsonr(true, pred)
@@ -20,8 +20,8 @@ def get_metrics(pred, true):
 
 	return {
 		"MSE": mse,
-		"RMSE": rmse,
 		"MAE": mae,
+		"MAPE": mape,
 		"R2": r2,
 		"Pearson_r": pearson_r,
 		"Pearson_p": pearson_p,
@@ -32,9 +32,19 @@ def get_metrics(pred, true):
 
 if __name__ == '__main__':
 
+	# pred_dir = "predictions/soft_prompt/str2/tscc_dev"
+	# model_names = [
+	# 	"dev4Lb_2025-12-05_11-14-13",
+	# 	"dev4Lb_m450_2025-12-06_16-44-44",
+	# 	"dev5_m450_2025-12-08_02-35-32",
+	# 	"dev5L_l1m_2025-12-08_00-22-52",
+	# 	"dev5L_m450_2025-12-07_21-46-02",
+	# ]
+
 	pred_dir = "predictions/soft_prompt/str2/tscc_v1"
 	model_names = [
 		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
+		"str2_l1m_f2000_p128_log_2026-01-12_13-28-53",
 	]
 
 	results = []

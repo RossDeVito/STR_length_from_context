@@ -125,8 +125,7 @@ def plot_residuals(ax, df):
 
 if __name__ == "__main__":
 	
-	# pred_dir = 'predictions/soft_prompt/str2/tscc_dev/dev5_m450_2025-12-08_02-35-32'
-	pred_dir = 'predictions/soft_prompt/str2/tscc_dev/dev5L_m450_2025-12-07_21-46-02'
+	pred_dir = 'predictions/soft_prompt/str2/tscc_v1/str2_l1m_f2000_p128_log_2026-01-12_13-28-53'
 	pred_path = os.path.join(pred_dir, 'predictions_test.tsv')
 
 	# Load predictions

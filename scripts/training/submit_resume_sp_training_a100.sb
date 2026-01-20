@@ -21,6 +21,10 @@ if [ -z "$RESUME_DIR" ]; then
     exit 1
 fi
 
+OUTPUT_DIR=${RESUME_DIR%/*}  # Parent directory of resume directory
+
+echo "Output directory set to: $OUTPUT_DIR"
+
 echo "Job $SLURM_JOB_ID started on $(hostname) at $(date)"
 echo "Resuming training from directory: $RESUME_DIR"
 
@@ -33,6 +37,6 @@ source ~/.bashrc
 conda activate str_len_pred_gpu
 
 # Run wrapper script
-./scripts/training/resume_soft_prompt_training.sh "$RESUME_DIR"
+./scripts/training/resume_soft_prompt_training.sh "$RESUME_DIR" "$OUTPUT_DIR"
 
 echo "Job finished at $(date)"
