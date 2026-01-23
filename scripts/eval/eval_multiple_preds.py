@@ -46,6 +46,7 @@ if __name__ == '__main__':
 		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
 		"str2_l1m_f1000_p128_log_2026-01-14_15-46-56",
 		"str2_l1m_f2000_p128_log_2026-01-12_13-28-53",
+		"str2_l1m_f4000_p128_log_2026-01-12_13-21-40_resumed_epoch62",
 	]
 
 	results = []
@@ -62,10 +63,76 @@ if __name__ == '__main__':
 			true=pred_df["true_length"]
 		)
 
+		# Get attributes from model name
+		# str{str_len}_{backbone_model}_f{n_flank}_p{prompt_len}...
+		str_len = model_name.split("_")[0][3:]
+		n_flank = model_name.split("_")[2][1:]
+		prompt_len = model_name.split("_")[3][1:]
+
 		results.append({
 			"model": model_name,
+			"str_len": str_len,
+			"n_flank": n_flank,
+			"prompt_len": prompt_len,
 			**metrics
 		})
 
 	results_df = pd.DataFrame(results)
-	print(results_df)
+	results_df["n_flank"] = results_df["n_flank"].astype(int)
+	results_df["prompt_len"] = results_df["prompt_len"].astype(int)
+
+	str1_res_df = results_df[results_df["str_len"] == "1"]
+	str2_res_df = results_df[results_df["str_len"] == "2"]
+
+	# Print metrics
+	display_cols = [
+		"model",
+		"MSE", "MAE", "MAPE", "R2",
+		"Pearson_r", "Pearson_p",
+		"Spearman_r", "Spearman_p"
+	]
+	print("Length 1 STR Results:")
+	print(str1_res_df[display_cols].to_string(index=False))
+	print("\nLength 2 STR Results:")
+	print(str2_res_df[display_cols].to_string(index=False))
+
+
+	# Plot performance by flank length
+
+	by_len_metric = "Spearman_r"
+	# by_len_metric = "Pearson_r"
+	# by_len_metric = "MAE"
+
+	if len(str1_res_df) > 1:
+		plt.figure(figsize=(8,6))
+		sns.lineplot(
+			data=str1_res_df,
+			x="n_flank",
+			y=by_len_metric,
+			marker="o"
+		)
+		plt.title("Length 1 STR Prediction Performance by Flank Length")
+		plt.xlabel("Flank Length (bp)")
+		plt.ylim(
+			bottom=0,
+			top=1.05 * str1_res_df[by_len_metric].max()
+		)
+		plt.grid(True)
+		plt.show()
+
+	if len(str2_res_df) > 1:
+		plt.figure(figsize=(8,6))
+		sns.lineplot(
+			data=str2_res_df,
+			x="n_flank",
+			y=by_len_metric,
+			marker="o"
+		)
+		plt.title("Length 2 STR Prediction Performance by Flank Length")
+		plt.xlabel("Flank Length (bp)")
+		plt.ylim(
+			bottom=0,
+			top=1.05 * str2_res_df[by_len_metric].max()
+		)
+		plt.grid(True)
+		plt.show()
