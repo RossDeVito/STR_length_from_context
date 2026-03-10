@@ -41,18 +41,31 @@ if __name__ == '__main__':
 	# 	"dev5L_m450_2025-12-07_21-46-02",
 	# ]
 
-	pred_dir = "predictions/soft_prompt/str2/tscc_v1"
+	pred_dir = {
+		1: "predictions/soft_prompt/str1/tscc_v1",
+		2: "predictions/soft_prompt/str2/tscc_v1"
+	}
+
 	model_names = [
+		"str1_l1m_f100_p128_log_2026-01-20_16-58-03",
+
 		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
 		"str2_l1m_f1000_p128_log_2026-01-14_15-46-56",
 		"str2_l1m_f2000_p128_log_2026-01-12_13-28-53",
 		"str2_l1m_f4000_p128_log_2026-01-12_13-21-40_resumed_epoch62",
+		"str2_l1m_f6000_p128_log_2026-01-12_13-28-59_resumed_epoch40",
 	]
 
 	results = []
 
 	for model_name in model_names:
-		pred_path = os.path.join(pred_dir, model_name, "predictions_test.tsv")
+
+		if model_name.startswith("str1_"):
+			pred_path = os.path.join(pred_dir[1], model_name, "predictions_test.tsv")
+		elif model_name.startswith("str2_"):
+			pred_path = os.path.join(pred_dir[2], model_name, "predictions_test.tsv")
+		else:
+			raise ValueError(f"Unknown model prefix for model: {model_name}")
 
 		# Load predictions
 		pred_df = pd.read_csv(pred_path, sep="\t")
@@ -92,10 +105,15 @@ if __name__ == '__main__':
 		"Spearman_r", "Spearman_p"
 	]
 	print("Length 1 STR Results:")
-	print(str1_res_df[display_cols].to_string(index=False))
+	print(str1_res_df[display_cols].to_string(
+		index=False,
+		max_colwidth=30,
+	))
 	print("\nLength 2 STR Results:")
-	print(str2_res_df[display_cols].to_string(index=False))
-
+	print(str2_res_df[display_cols].to_string(
+		index=False,
+		max_colwidth=30,
+	))
 
 	# Plot performance by flank length
 
