@@ -458,6 +458,13 @@ def main():
 	all_labels = np.array(labels_list, dtype=np.float32)
 	all_deltas = np.array(deltas_list, dtype=np.float32)
 
+	# Per-sample relative convergence delta
+	# Both delta and denominator are in raw model output space
+	# (log space if log_transform=True)
+	raw_pred_diffs = np.abs(all_raw_predictions - all_raw_baseline_predictions)
+	safe_diffs = np.where(raw_pred_diffs > 1e-6, raw_pred_diffs, 1.0)
+	all_relative_deltas = np.abs(all_deltas) / safe_diffs
+
 	# ------------------------------------------------------------------
 	# Save results
 	# ------------------------------------------------------------------
@@ -474,7 +481,10 @@ def main():
 		raw_baseline_predictions=all_raw_baseline_predictions,
 		labels=all_labels,
 		convergence_deltas=all_deltas,
+		relative_convergence_deltas=all_relative_deltas,
 		position_labels=np.array(position_labels),
+		hipstr_names=split_df["HipSTR_name"].values,
+		rev_comp=split_df["rev_comp"].values,
 	)
 	print(f"Attributions saved to {npz_path}")
 
@@ -483,10 +493,7 @@ def main():
 	# ------------------------------------------------------------------
 	# Delta is in the model's raw output space (log space if
 	# log_transform=True), so the denominator must match.
-	raw_pred_diffs = np.abs(all_raw_predictions - all_raw_baseline_predictions)
-	safe_diffs = np.where(raw_pred_diffs > 1e-6, raw_pred_diffs, 1.0)
-	relative_deltas = np.abs(all_deltas) / safe_diffs
-
+	# Per-sample relative deltas already computed above.
 	convergence = {
 		"absolute_delta": {
 			"mean": float(np.mean(np.abs(all_deltas))),
@@ -495,15 +502,15 @@ def main():
 			"std": float(np.std(np.abs(all_deltas))),
 		},
 		"relative_delta": {
-			"mean": float(np.mean(relative_deltas)),
-			"median": float(np.median(relative_deltas)),
-			"max": float(np.max(relative_deltas)),
-			"std": float(np.std(relative_deltas)),
+			"mean": float(np.mean(all_relative_deltas)),
+			"median": float(np.median(all_relative_deltas)),
+			"max": float(np.max(all_relative_deltas)),
+			"std": float(np.std(all_relative_deltas)),
 			"pct_above_5pct": float(
-				np.mean(relative_deltas > 0.05) * 100
+				np.mean(all_relative_deltas > 0.05) * 100
 			),
 			"pct_above_1pct": float(
-				np.mean(relative_deltas > 0.01) * 100
+				np.mean(all_relative_deltas > 0.01) * 100
 			),
 		},
 		"raw_prediction_diff_F_input_minus_F_baseline": {

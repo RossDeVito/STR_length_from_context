@@ -1,7 +1,7 @@
 import numpy as np
 
 data = np.load(
-	"output/str2/v1/2000_dev_50steps.npz",
+	"output/str2/v1/2000_dev_100steps_rt/attributions.npz",
 	allow_pickle=True
 )
 

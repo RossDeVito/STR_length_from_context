@@ -8,7 +8,7 @@ desc: "str2/v1/2000_dev_400steps_rt"
 
 # --- IG ---
 split: "test"
-batch_size: 128
+batch_size: 64
 num_workers: 4
 n_steps: 400
 method: "riemann_trapezoid"
