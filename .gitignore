@@ -20,6 +20,9 @@ tscc_cmds.md
 # Predictions
 **/eval/predictions/
 
+# Integrated gradients output
+**/ig/output/
+
 # Ref genome files
 **/reference_genome/*.fa
 **/reference_genome/*.fai
