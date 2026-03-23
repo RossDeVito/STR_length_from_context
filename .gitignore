@@ -9,6 +9,7 @@ tscc_cmds.md
 # STR data files
 **/STR_data/**/*.bed
 **/STR_data/**/*.tsv
+!**/STR_data/**/str_len_2_dev.tsv
 
 # Invalid regions
 **/data/invalid_regions/**.bed.gz

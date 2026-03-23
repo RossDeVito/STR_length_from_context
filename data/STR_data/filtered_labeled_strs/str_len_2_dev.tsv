@@ -1,0 +1,17 @@
+HipSTR_name	chrom	rev_comp	copy_number	str_start	str_end	split
+Human_STR_271	chr1	False	6.0	950659	950671	train
+Human_STR_271	chr1	True	6.0	950659	950671	train
+Human_STR_317	chr1	False	6.5	1029590	1029603	train
+Human_STR_317	chr1	True	6.5	1029590	1029603	train
+Human_STR_318	chr1	False	8.0	1029629	1029645	train
+Human_STR_318	chr1	True	8.0	1029629	1029645	train
+Human_STR_970542	chr3	True	7.0	114466013	114466027	val
+Human_STR_970561	chr3	False	6.5	114508715	114508728	val
+Human_STR_970561	chr3	True	6.5	114508715	114508728	val
+Human_STR_970587	chr3	False	7.0	114569865	114569879	val
+Human_STR_970587	chr3	True	7.0	114569865	114569879	val
+Human_STR_970599	chr3	False	7.5	114597043	114597058	val
+Human_STR_402966	chr14	False	6.0	20044424	20044436	test
+Human_STR_402977	chr14	True	7.5	20073305	20073320	test
+Human_STR_402988	chr14	True	6.5	20090983	20090996	test
+Human_STR_404742	chr14	False	23.5	23036217	23036264	test
