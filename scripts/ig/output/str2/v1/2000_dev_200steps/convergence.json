@@ -1,0 +1,26 @@
+{
+    "absolute_delta": {
+        "mean": 0.9136121273040771,
+        "median": 1.1550534963607788,
+        "max": 1.3221503496170044,
+        "std": 0.46463996171951294
+    },
+    "relative_delta": {
+        "mean": 41.07481002807617,
+        "median": 15.29240608215332,
+        "max": 103.47384643554688,
+        "std": 44.34391784667969,
+        "pct_above_5pct": 100.0,
+        "pct_above_1pct": 100.0
+    },
+    "raw_prediction_diff_F_input_minus_F_baseline": {
+        "mean": 0.05225173756480217,
+        "median": 0.059134483337402344,
+        "min": 0.011162757873535156,
+        "max": 0.08645796775817871
+    },
+    "log_transform": true,
+    "n_samples": 3,
+    "n_steps": 200,
+    "method": "gausslegendre"
+}

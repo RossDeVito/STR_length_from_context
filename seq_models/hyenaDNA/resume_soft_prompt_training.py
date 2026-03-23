@@ -157,3 +157,7 @@ if __name__ == "__main__":
     print(f"--- Resuming training... ---")
     trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
     print("--- Training complete ---")
+    
+	# Save TRAINING_COMPLETED.txt as a marker file
+    with open(os.path.join(new_experiment_path, "TRAINING_COMPLETED.txt"), "w") as f:
+		f.write("Training completed successfully.\n")

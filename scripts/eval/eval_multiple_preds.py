@@ -43,20 +43,23 @@ if __name__ == '__main__':
 
 	pred_dir = {
 		1: "predictions/soft_prompt/str1/tscc_v1",
-		2: "predictions/soft_prompt/str2/tscc_v1"
+		2: "predictions/soft_prompt/str2/v1"
 	}
 
 	model_names = [
 		"str1_l1m_f100_p128_log_2026-01-20_16-58-03",
-		# "str1_l1m_f1000_p128_log_2026-01-20_20-36-26",
-		# "str1_l1m_f2000_p128_log_2026-01-22_16-33-39_resumed_epoch70",
-		# "str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24_resumed_epoch33",
+		"str1_l1m_f1000_p128_log_2026-01-20_20-36-26",
+		"str1_l1m_f2000_p128_log_2026-01-22_16-33-39_resumed_epoch70",
+		"str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24",
+		"str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24_resumed_epoch33",
 
 		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
 		"str2_l1m_f1000_p128_log_2026-01-14_15-46-56",
 		"str2_l1m_f2000_p128_log_2026-01-12_13-28-53",
+		"str2_l1m_f3000_p128_log_2026-03-18_18-43-41",
 		"str2_l1m_f4000_p128_log_2026-01-12_13-21-40_resumed_epoch62",
 		"str2_l1m_f6000_p128_log_2026-01-12_13-28-59_resumed_epoch40",
+		"str2_l1m_f8000_p128_log_2026-01-12_19-40-12_resumed_epoch28_resumed_epoch57",
 	]
 
 	results = []

@@ -1,0 +1,67 @@
+{
+    "config": {
+        "data_path": "data/STR_data/filtered_labeled_strs/str_len_2_dev.tsv",
+        "ref_path": "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa",
+        "model_path": "scripts/training/output/soft_prompt/str2/v1/str2_l1m_f2000_p128_log_2026-01-12_13-28-53/checkpoints/best-model-epoch=76.ckpt",
+        "desc": "str2/v1/2000_dev_50steps",
+        "split": "test",
+        "batch_size": 64,
+        "num_workers": 4,
+        "n_steps": 50
+    },
+    "model_hyperparameters": {
+        "hyenaDNA_checkpoint": "LongSafari/hyenadna-large-1m-seqlen-hf",
+        "tuning_strategy": "soft_prompt",
+        "optimizer_name": "Adam",
+        "lr": 0.001,
+        "backbone_lr": 1e-05,
+        "weight_decay": 0.0,
+        "scheduler_name": "ReduceLROnPlateau",
+        "warmup_steps": 100,
+        "scheduler_patience": 5,
+        "scheduler_factor": 0.5,
+        "use_gradient_checkpointing": false,
+        "log_transform": true,
+        "head_dropout": 0.1,
+        "use_attention_pooling": true,
+        "attention_pooling_num_heads": 4,
+        "n_prefix_prompt_tokens": 128,
+        "n_str_prompt_tokens": 128,
+        "n_prompt_tokens": null
+    },
+    "datamodule_hyperparameters": {
+        "data_path": "data/STR_data/filtered_labeled_strs/str_len_2_max_cn_perc_0.975_n_flanking_10000_filtered.tsv",
+        "ref_path": "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa",
+        "tokenizer_checkpoint": "LongSafari/hyenadna-large-1m-seqlen-hf",
+        "batch_size": 32,
+        "n_flanking_bp": 2000,
+        "n_str_bp": 8,
+        "n_prefix_prompt_tokens": 128,
+        "n_str_prompt_tokens": 128,
+        "num_workers": 4
+    },
+    "sequence_layout": {
+        "n_prefix_prompt": 128,
+        "n_flanking_bp": 2000,
+        "n_str_bp": 8,
+        "n_str_prompt": 128,
+        "seq_len": 4272,
+        "order": [
+            "prefix_prompt",
+            "left_flank",
+            "left_str",
+            "str_prompt",
+            "right_str",
+            "right_flank"
+        ]
+    },
+    "ig_config": {
+        "n_steps": 50,
+        "internal_batch_size": 64,
+        "method": "gausslegendre",
+        "baseline": "mean_ACGT_embedding (flanking only)"
+    },
+    "n_samples": 2,
+    "device": "mps",
+    "timestamp": "2026-03-22T21:40:02.414954"
+}
