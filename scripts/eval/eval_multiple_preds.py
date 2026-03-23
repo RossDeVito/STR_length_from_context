@@ -42,7 +42,7 @@ if __name__ == '__main__':
 	# ]
 
 	pred_dir = {
-		1: "predictions/soft_prompt/str1/tscc_v1",
+		1: "predictions/soft_prompt/str1/v1",
 		2: "predictions/soft_prompt/str2/v1"
 	}
 
@@ -50,6 +50,7 @@ if __name__ == '__main__':
 		"str1_l1m_f100_p128_log_2026-01-20_16-58-03",
 		"str1_l1m_f1000_p128_log_2026-01-20_20-36-26",
 		"str1_l1m_f2000_p128_log_2026-01-22_16-33-39_resumed_epoch70",
+		"str1_l1m_f4000_p128_log_2026-01-22_16-33-39_resumed_epoch37_resumed_epoch76_resumed_epoch101",
 		"str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24",
 		"str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24_resumed_epoch33",
 
