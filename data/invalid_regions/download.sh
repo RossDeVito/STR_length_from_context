@@ -9,7 +9,7 @@ echo "--- 1. Processing Mobile Elements (RepeatMasker) ---"
 # Filter: Keep SINE, LINE, LTR, DNA
 # Extract: Columns 6(chrom), 7(start), 8(end), 12(repClass)
 wget -qO- $RMSK_URL | gunzip -c | awk 'BEGIN{OFS="\t"} {
-    if ($12 ~ /SINE|LINE|LTR|DNA/) {
+    if ($12 ~ /SINE|LINE|LTR|DNA|Satellite|RC|RNA|Retroposon/) {
         print $6, $7, $8, $12
     }
 }' | gzip > mobile_elements.bed.gz

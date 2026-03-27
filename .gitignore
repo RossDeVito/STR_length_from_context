@@ -19,7 +19,7 @@ tscc_cmds.md
 **/training/dev1.py
 
 # Predictions
-**/eval/predictions/
+**/eval_preds/predictions/
 
 # Integrated gradients output
 **/ig/output/

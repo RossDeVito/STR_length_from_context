@@ -1,10 +1,12 @@
 """Remove STRs in invalid regions from dataset.
 
 Filters output of create_ref_based_labeled_strs.py to remove STRs located
-in mobile elements or segmental duplications (where there may be data 
-leakage issues) and ENCODE blacklist regions (which may be low quality).
-Assumes the exclusion region files are in the format resulting from
-data/invalid_regions/download.sh.
+in repetitive elements (mobile elements, satellites, RNA gene clusters, and
+other repeat families with high inter-chromosomal sequence identity),
+segmental duplications, ENCODE blacklist regions (which may be low quality),
+and pseudoautosomal regions (PARs) on chrX/chrY — all of which can cause
+data leakage across chromosome-based splits. Assumes the exclusion region
+files are in the format resulting from data/invalid_regions/download.sh.
 
 Output columns are the same as input:
 - HipSTR_name: Name of the STR in HipSTR reference
@@ -28,6 +30,8 @@ CLI args:
 		Default: "../invalid_regions/seg_dups.bed.gz".
 	blacklist_bed: Path to BED file with ENCODE blacklist regions.
 		Default: "../invalid_regions/blacklist.bed.gz".
+	exclude_pars: Whether to exclude pseudoautosomal regions (PARs) on
+		chrX and chrY. Default: True.
 	output_dir: Directory to save filtered STR file. Default:
 		"../STR_data/filtered_labeled_strs/"
 """
@@ -37,6 +41,19 @@ import argparse
 import numpy as np
 import pandas as pd
 import tqdm
+
+
+# GRCh38 pseudoautosomal regions (0-based half-open coordinates to match
+# BED convention and the str_start/str_end columns in our data).
+# Source: GRC, https://www.ncbi.nlm.nih.gov/grc/human
+# The 1-based coordinates (10,001–2,781,479 etc.) are converted here to
+# 0-based half-open: start = orig_start - 1, end = orig_end.
+GRCH38_PAR_REGIONS = {
+	"PAR1_chrX": {"chrom": "chrX", "start": 10000, "end": 2781479},
+	"PAR2_chrX": {"chrom": "chrX", "start": 155701382, "end": 156030895},
+	"PAR1_chrY": {"chrom": "chrY", "start": 10000, "end": 2781479},
+	"PAR2_chrY": {"chrom": "chrY", "start": 56887902, "end": 57217415},
+}
 
 
 def get_args():
@@ -70,6 +87,17 @@ def get_args():
 		type=str,
 		default="../invalid_regions/blacklist.bed.gz",
 		help="Path to BED file with ENCODE blacklist regions. "
+	)
+
+	parser.add_argument(
+		"--exclude_pars",
+		action=argparse.BooleanOptionalAction,
+		default=True,
+		help=(
+			"Exclude pseudoautosomal regions (PARs) on chrX/chrY to "
+			"prevent data leakage across chromosome-based splits. "
+			"Default: True. Use --no-exclude_pars to disable."
+		)
 	)
 	
 	parser.add_argument(
@@ -212,6 +240,14 @@ if __name__ == "__main__":
 		subset = mobile_df[mobile_df["class"] == m_class]
 		mobile_searchers[m_class] = GenomicIntersector(subset[[ "chrom", "start", "end" ]], m_class)
 
+	# Build PAR intersectors (one per PAR region for granular tracking)
+	par_searchers = {}
+	if args.exclude_pars:
+		print("Adding pseudoautosomal region (PAR) exclusions...")
+		for par_name, coords in GRCH38_PAR_REGIONS.items():
+			par_df = pd.DataFrame([coords])
+			par_searchers[par_name] = GenomicIntersector(par_df, par_name)
+
 	# 3. Check Overlaps
 	print("Checking overlaps...")
 	
@@ -221,6 +257,10 @@ if __name__ == "__main__":
 	
 	for m_class, searcher in mobile_searchers.items():
 		col_name = f"overlap_{m_class}"
+		str_df[col_name] = searcher.check_overlaps(str_df)
+
+	for par_name, searcher in par_searchers.items():
+		col_name = f"overlap_{par_name}"
 		str_df[col_name] = searcher.check_overlaps(str_df)
 
 	# 4. Calculate Stats
@@ -251,8 +291,15 @@ if __name__ == "__main__":
 	for m_class in sorted(mobile_searchers.keys()):
 		print_stat(f"Overlapping {m_class}", str_df[f"overlap_{m_class}"])
 
+	for par_name in sorted(par_searchers.keys()):
+		print_stat(f"Overlapping {par_name}", str_df[f"overlap_{par_name}"])
+
 	# 5. Combined Filter
-	filter_cols = ["overlap_blacklist", "overlap_segdup"] + [f"overlap_{c}" for c in mobile_searchers.keys()]
+	filter_cols = (
+		["overlap_blacklist", "overlap_segdup"]
+		+ [f"overlap_{c}" for c in mobile_searchers.keys()]
+		+ [f"overlap_{p}" for p in par_searchers.keys()]
+	)
 	str_df["is_excluded"] = str_df[filter_cols].any(axis=1)
 	
 	n_excluded = str_df["is_excluded"].sum()
