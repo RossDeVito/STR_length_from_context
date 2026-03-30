@@ -1,6 +1,14 @@
-""" Evaluate predictions from multiple models. """
+""" Evaluate predictions from multiple models. 
+
+Also plots against baseline overall and by motif means, created by
+get_baseline_performance.py and saved in 
+predictions/baseline/mean_performance.json
+"""
 
 import os
+import json
+from pprint import pprint
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,18 +40,9 @@ def get_metrics(pred, true):
 
 if __name__ == '__main__':
 
-	# pred_dir = "predictions/soft_prompt/str2/tscc_dev"
-	# model_names = [
-	# 	"dev4Lb_2025-12-05_11-14-13",
-	# 	"dev4Lb_m450_2025-12-06_16-44-44",
-	# 	"dev5_m450_2025-12-08_02-35-32",
-	# 	"dev5L_l1m_2025-12-08_00-22-52",
-	# 	"dev5L_m450_2025-12-07_21-46-02",
-	# ]
-
 	pred_dir = {
 		1: "predictions/soft_prompt/str1/v1",
-		2: "predictions/soft_prompt/str2/v1"
+		2: "predictions/soft_prompt/str2/v2"
 	}
 
 	model_names = [
@@ -54,13 +53,8 @@ if __name__ == '__main__':
 		"str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24",
 		"str1_l1m_f6000_p128_log_2026-01-22_16-35-17_resumed_epoch24_resumed_epoch33",
 
-		"str2_l1m_f100_p128_log_2026-01-12_13-28-45",
-		"str2_l1m_f1000_p128_log_2026-01-14_15-46-56",
-		"str2_l1m_f2000_p128_log_2026-01-12_13-28-53",
-		"str2_l1m_f3000_p128_log_2026-03-18_18-43-41",
-		"str2_l1m_f4000_p128_log_2026-01-12_13-21-40_resumed_epoch62",
-		"str2_l1m_f6000_p128_log_2026-01-12_13-28-59_resumed_epoch40",
-		"str2_l1m_f8000_p128_log_2026-01-12_19-40-12_resumed_epoch28_resumed_epoch57",
+		"str2_l1m_f100_p128_log_2026-03-27_13-08-24",
+		"str2_l1m_f2000_p128_log_2026-03-27_13-08-24",
 	]
 
 	results = []
@@ -104,6 +98,13 @@ if __name__ == '__main__':
 	str1_res_df = results_df[results_df["str_len"] == "1"]
 	str2_res_df = results_df[results_df["str_len"] == "2"]
 
+	# Load baseline performance JSON
+	with open('predictions/baseline/mean_performance.json', 'r') as file:
+		baseline_perf = json.load(file)
+
+	print("Mean baseline performance")
+	pprint(baseline_perf)
+
 	# Print metrics
 	display_cols = [
 		"model",
@@ -127,6 +128,7 @@ if __name__ == '__main__':
 	by_len_metric = "Spearman_r"
 	# by_len_metric = "Pearson_r"
 	# by_len_metric = "MAE"
+	# by_len_metric = "MAPE"
 
 	if len(str1_res_df) > 1:
 		plt.figure(figsize=(8,6))
@@ -136,13 +138,37 @@ if __name__ == '__main__':
 			y=by_len_metric,
 			marker="o"
 		)
+		
+		# Add baseline means
+		overall_mean_val = baseline_perf["1"]["overall_mean"].get(by_len_metric)
+		if overall_mean_val is not None and not np.isnan(overall_mean_val):
+			plt.axhline(
+				y=overall_mean_val,
+				color='red',
+				linestyle='--',
+				label='Overall Mean')
+		
+		motif_mean_val = baseline_perf["1"]["motif_mean"].get(by_len_metric)
+		if motif_mean_val is not None and not np.isnan(motif_mean_val):
+			plt.axhline(
+				y=motif_mean_val,
+				color='orange',
+				linestyle='--',
+				label='STR Motif Mean'
+			)
+		
 		plt.title("Length 1 STR Prediction Performance by Flank Length")
 		plt.xlabel("Flank Length (bp)")
 		plt.ylim(
 			bottom=0,
-			top=1.05 * str1_res_df[by_len_metric].max()
+			top=1.05 * max(
+				str1_res_df[by_len_metric].max(),
+				overall_mean_val,
+				motif_mean_val
+			)
 		)
 		plt.grid(True)
+		plt.legend(loc='lower right')
 		plt.show()
 
 	if len(str2_res_df) > 1:
@@ -153,11 +179,36 @@ if __name__ == '__main__':
 			y=by_len_metric,
 			marker="o"
 		)
+		
+		# Add baseline means
+		overall_mean_val = baseline_perf["2"]["overall_mean"].get(by_len_metric)
+		if overall_mean_val is not None and not np.isnan(overall_mean_val):
+			plt.axhline(
+				y=overall_mean_val,
+				color='red',
+				linestyle='--',
+				label='Overall Mean'
+			)
+		
+		motif_mean_val = baseline_perf["2"]["motif_mean"].get(by_len_metric)
+		if motif_mean_val is not None and not np.isnan(motif_mean_val):
+			plt.axhline(
+				y=motif_mean_val,
+				color='orange',
+				linestyle='--',
+				label='STR Motif Mean'
+			)
+		
 		plt.title("Length 2 STR Prediction Performance by Flank Length")
 		plt.xlabel("Flank Length (bp)")
 		plt.ylim(
 			bottom=0,
-			top=1.05 * str2_res_df[by_len_metric].max()
+			top=1.05 * max(
+				str2_res_df[by_len_metric].max(),
+				overall_mean_val,
+				motif_mean_val
+			)
 		)
 		plt.grid(True)
+		plt.legend(loc='lower right')
 		plt.show()

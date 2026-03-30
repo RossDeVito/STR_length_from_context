@@ -1,7 +1,7 @@
 #!/bin/bash
 
 MODEL_DIR="scripts/training/output/"
-OUTPUT_DIR="scripts/eval/predictions/"
+OUTPUT_DIR="scripts/eval_preds/predictions/"
 
 # Check if an argument was provided
 if [ -z "$1" ]; then
