@@ -1,0 +1,31 @@
+# STR Length Model — Python dependencies
+# Install with: pip install -r requirements.txt
+#
+# PyTorch: install separately first if you need a specific CUDA version.
+# See https://pytorch.org/get-started/locally/
+# e.g. pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# --- Core ML ---
+torch
+pytorch-lightning
+transformers
+captum
+
+# --- Scientific stack ---
+numpy
+pandas
+scipy
+scikit-learn
+
+# --- Genomics ---
+pyfaidx
+
+# --- Visualisation ---
+matplotlib
+seaborn
+logomaker
+
+# --- Utilities ---
+tqdm
+pyyaml
+tensorboard
