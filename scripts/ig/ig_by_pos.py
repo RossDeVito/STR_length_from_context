@@ -44,7 +44,7 @@ PRED_DIFF_THRESHOLD = 0.05
 
 # Filter: maximum relative convergence delta to include a sample.
 # Set to None to skip this filter.
-REL_DELTA_THRESHOLD = 0.05
+REL_DELTA_THRESHOLD = None
 
 # Figure size (per subplot)
 FIG_WIDTH = 20

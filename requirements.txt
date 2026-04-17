@@ -16,6 +16,7 @@ numpy
 pandas
 scipy
 scikit-learn
+statsmodels
 
 # --- Genomics ---
 pyfaidx
@@ -27,5 +28,6 @@ logomaker
 
 # --- Utilities ---
 tqdm
+pyarrow
 pyyaml
 tensorboard

@@ -40,6 +40,10 @@ def get_metrics(pred, true):
 
 if __name__ == '__main__':
 
+	# by_len_metric = "Spearman_r"
+	# by_len_metric = "MAPE"
+	by_len_metric = "R2"
+
 	pred_dir = {
 		1: "predictions/soft_prompt/str1/v2",
 		2: "predictions/soft_prompt/str2/v2"
@@ -62,6 +66,15 @@ if __name__ == '__main__':
 
 	lin_model_names = [
 		"str1_f100_log",
+		"str1_f2000_log",
+		"str1_f4000_log",
+		"str1_f6000_log",
+		"str1_f8000_log",
+		"str2_f100_log",
+		"str2_f2000_log",
+		"str2_f4000_log",
+		"str2_f6000_log",
+		"str2_f8000_log",
 	]
 
 	results = []
@@ -185,8 +198,6 @@ if __name__ == '__main__':
 	# ------------------------------------------------------------------
 	# Plot performance by flank length
 	# ------------------------------------------------------------------
-
-	by_len_metric = "Spearman_r"
 
 	for str_len_str, hyena_sub, lin_sub in [
 		("1", str1_hyena_df, str1_lin_df),

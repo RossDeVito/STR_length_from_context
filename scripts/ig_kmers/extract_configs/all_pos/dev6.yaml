@@ -1,0 +1,7 @@
+desc: "str2/dev/dev6"
+attr_npz_path: "scripts/ig/output/str2/v1/2000_p128_300steps_rt/attributions.npz"
+
+k: 6
+max_distance: 1000
+pred_diff_threshold: 0.05
+rel_delta_threshold: 0.05

@@ -1,0 +1,9 @@
+desc: "str2/dev/dev_bymotif_rank_abs"
+input_path: "scripts/ig_kmers/output/extract/str2/dev/dev1/kmer_data.parquet"
+
+seed: 36
+n_permutations: 10000
+use_ranks: True
+use_absolute: True
+by_motif: True
+min_kmer_count: 25

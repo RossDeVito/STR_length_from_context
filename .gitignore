@@ -24,6 +24,9 @@ tscc_cmds.md
 # Integrated gradients output
 **/ig/output/
 
+# K-mer analysis output
+**/ig_kmers/output/
+
 # Permuted region importance output
 **/region_permutation_importance/output/
 

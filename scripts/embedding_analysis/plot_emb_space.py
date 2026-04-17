@@ -61,7 +61,7 @@ if __name__ == "__main__":
 		tokenizer.get_vocab()['C'],
 		tokenizer.get_vocab()['G'],
 		tokenizer.get_vocab()['T'],
-		tokenizer.get_vocab()['N'],
+		# tokenizer.get_vocab()['N'],
 	]]
 
 	all_prompt_ids = torch.arange(
@@ -96,7 +96,7 @@ if __name__ == "__main__":
 	# Plot just the base embeddings in base space
 	plt.figure(figsize=(6, 6))
 	sns.scatterplot(x=base_only_emb_2d[:, 0], y=base_only_emb_2d[:, 1], s=100)
-	for i, base in enumerate(['A', 'C', 'G', 'T', 'N']):
+	for i, base in enumerate(['A', 'C', 'G', 'T']):
 		plt.text(base_only_emb_2d[i, 0]+0.01, base_only_emb_2d[i, 1]+0.01, base, fontsize=12)
 	plt.title("PCA of Base Token Embeddings in Base Embedding Space")
 	plt.xlabel("PC1")
@@ -109,7 +109,7 @@ if __name__ == "__main__":
 	# Plot just the base embeddings
 	plt.figure(figsize=(6, 6))
 	sns.scatterplot(x=base_emb_2d[:, 0], y=base_emb_2d[:, 1], s=100)
-	for i, base in enumerate(['A', 'C', 'G', 'T', 'N']):
+	for i, base in enumerate(['A', 'C', 'G', 'T']):
 		plt.text(base_emb_2d[i, 0]+0.01, base_emb_2d[i, 1]+0.01, base, fontsize=12)
 	plt.title("PCA of Base Token Embeddings in PCA Space of All Embeddings")
 	plt.xlabel("PC1")
@@ -124,7 +124,7 @@ if __name__ == "__main__":
 	sns.scatterplot(x=prefix_emb_2d[:, 0], y=prefix_emb_2d[:, 1], s=100, color='blue', label='Prefix Prompt Tokens')
 	sns.scatterplot(x=in_str_emb_2d[:, 0], y=in_str_emb_2d[:, 1], s=100, color='green', label='In-STR Prompt Tokens')
 	sns.scatterplot(x=base_emb_2d[:, 0], y=base_emb_2d[:, 1], s=100, color='red', label='Base Tokens')
-	for i, base in enumerate(['A', 'C', 'G', 'T', 'N']):
+	for i, base in enumerate(['A', 'C', 'G', 'T']):
 		plt.text(base_emb_2d[i, 0]+0.01, base_emb_2d[i, 1]+0.01, base, fontsize=12)
 	plt.title("PCA of Token Embeddings")
 	plt.xlabel("PC1")
