@@ -19,7 +19,7 @@ INTER_FILE=${OUT_DIR}/all_samples_intersection.txt
 
 # Extract per-chromosome sample lists
 for CHR_NUM in $(seq 1 22); do
-	VCF=${VCF_DIR}/chr${CHR_NUM}_hipstr_statstr.vcf.gz
+	VCF=${VCF_DIR}/hipstr_corrected_chr${CHR_NUM}.vcf.gz
 	OUT=${PER_CHROM_DIR}/chr${CHR_NUM}_samples.txt
 	echo "[$(date '+%H:%M:%S')] Extracting samples from chr${CHR_NUM}..."
 	${BCFTOOLS} query -l ${VCF} | sort > ${OUT}
