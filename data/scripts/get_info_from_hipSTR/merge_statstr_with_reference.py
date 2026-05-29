@@ -57,12 +57,16 @@ def main():
 	print(f"  rows: {len(ref):,}")
 
 	# --- Sanity: no duplicate keys on either side ---
-	stats_dups = stats.duplicated(subset=KEY).sum()
-	ref_dups = ref.duplicated(subset=KEY).sum()
-	if stats_dups:
-		sys.exit(f"ERROR: {stats_dups} duplicate (chrom,start,end) rows in statSTR file.")
-	if ref_dups:
-		sys.exit(f"ERROR: {ref_dups} duplicate (chrom,start,end) rows in reference BED.")
+	for name, df in [("statSTR file", stats), ("reference BED", ref)]:
+		dup_mask = df.duplicated(subset=KEY, keep=False)
+		n_dup = int(dup_mask.sum())
+		if n_dup:
+			print(f"\nERROR: {n_dup} rows with duplicate (chrom,start,end) "
+			      f"in {name}:", file=sys.stderr)
+			# Show all involved rows, sorted by the key for readability.
+			dup_rows = df.loc[dup_mask].sort_values(KEY)
+			print(dup_rows.to_string(index=False), file=sys.stderr)
+			sys.exit(1)
 
 	# --- Inner merge ---
 	merged = stats.merge(ref, on=KEY, how="inner", validate="one_to_one")
