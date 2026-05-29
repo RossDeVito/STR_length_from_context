@@ -11,7 +11,7 @@ BASE=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context
 
 STATSTR_FILE=${BASE}/data/STR_data/HipSTR_data/all_chroms_statstr.tab
 REF_BED=${BASE}/data/STR_data/HipSTR-reference/hg38.hipstr_reference.bed
-OUT_FILE=${BASE}/data/STR_data/HipSTR_data/all_chroms_statstr_with_ref.tab
+OUT_FILE=${BASE}/data/STR_data/HipSTR_data/1000G_HipSTR_stats.tsv
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

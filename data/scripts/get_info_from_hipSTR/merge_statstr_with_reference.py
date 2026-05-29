@@ -23,7 +23,7 @@ REF_COLS = [
 	"motif_len", "ref_copy_number",
 	"hipstr_name", "motif",
 ]
-KEY = ["chrom", "start", "end"]
+KEY = ["chrom", "start"]
 
 
 def parse_args():
@@ -68,19 +68,41 @@ def main():
 	print(f"  statSTR rows: {n_stats_before:,} -> {len(stats):,}")
 	print(f"  reference rows: {n_ref_before:,} -> {len(ref):,}")
 
-	# --- Sanity: no duplicate keys on either side ---
+	# --- Sanity: no duplicate keys on either side (uses original chrom,start) ---
 	for name, df in [("statSTR file", stats), ("reference BED", ref)]:
 		dup_mask = df.duplicated(subset=KEY, keep=False)
 		n_dup = int(dup_mask.sum())
 		if n_dup:
-			print(f"\nERROR: {n_dup} rows with duplicate (chrom,start,end) "
+			print(f"\nERROR: {n_dup} rows with duplicate {tuple(KEY)} "
 			      f"in {name}:", file=sys.stderr)
-			# Show all involved rows, sorted by the key for readability.
 			dup_rows = df.loc[dup_mask].sort_values(KEY)
 			print(dup_rows.to_string(index=False), file=sys.stderr)
 			sys.exit(1)
 
-	# --- Inner merge ---
+	# --- Rename `end` on each side so both survive the merge ---
+	# Both files are 0-based half-open. `start` matches exactly between
+	# them, but `end` does not: HipSTR data-adaptively extends the VCF REF
+	# allele to encompass observed polymorphic flanking bases, so the
+	# call-side `end` is typically a few bp larger than the reference STR
+	# `end`, by a locus-dependent amount.
+	# Refs:
+	#   Ziaei Jam et al. 2023 (EnsembleTR paper), Nat Commun, Methods:
+	#     "HipSTR in some cases adjusts the coordinates of an STR region
+	#      to encompass polymorphic flanking regions around the repeat."
+	#   TRTools mergeSTR docs note that mergeSTR strips HipSTR flanking
+	#   basepairs from alleles before merging for this exact reason.
+	# Not a build issue (both sides are hg38) -- coordinates would be
+	# shifted by orders of magnitude more if it were.
+	stats = stats.rename(columns={"end": "end_call"})
+	ref = ref.rename(columns={"end": "end_ref"})
+
+	# --- Diagnostic: show what the keys look like on each side ---
+	print("\nstatSTR head:")
+	print(stats[["chrom", "start", "end_call"]].head(3).to_string(index=False))
+	print("reference head:")
+	print(ref[["chrom", "start", "end_ref"]].head(3).to_string(index=False))
+
+	# --- Inner merge on (chrom, start) ---
 	merged = stats.merge(ref, on=KEY, how="inner", validate="one_to_one")
 	print(f"\nMerged rows: {len(merged):,}")
 
@@ -93,12 +115,19 @@ def main():
 	if n_stats_unmatched > 0:
 		# This is unexpected -- statSTR was run on the same VCFs that came
 		# from the HipSTR reference, so every called locus should be in ref.
-		print("WARNING: some statSTR rows did not match the reference; "
-		      "this should not happen for HipSTR calls.")
+		print("WARNING: some statSTR rows did not match the reference on "
+		      "(chrom, start); this should not happen for HipSTR calls.")
+	else:
+		print("OK: all statSTR rows matched a reference locus on (chrom, start).")
 
-	# --- Column order: locate columns then statSTR stat columns ---
-	stat_cols = [c for c in stats.columns if c not in KEY]
-	out_cols = KEY + ["hipstr_name", "motif", "motif_len", "ref_copy_number"] + stat_cols
+	# --- Column order ---
+	stat_cols = [c for c in stats.columns
+	             if c not in {"chrom", "start", "end_call"}]
+	out_cols = (
+		["chrom", "start", "end_ref", "end_call",
+		 "hipstr_name", "motif", "motif_len", "ref_copy_number"]
+		+ stat_cols
+	)
 	merged = merged[out_cols]
 
 	# Strip statSTR's "-1" group suffix from stat column names
