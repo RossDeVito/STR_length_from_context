@@ -56,6 +56,18 @@ def main():
 	)
 	print(f"  rows: {len(ref):,}")
 
+	# --- Restrict to autosomes ---
+	# statSTR was run on chr1..chr22 only. The HipSTR reference also contains
+	# chrX/chrY (and some loci on chrY are duplicated on the (chrom,start,end)
+	# key), so drop non-autosomes from both sides for a clean 1-to-1 join.
+	autosomes = {f"chr{i}" for i in range(1, 23)}
+	n_stats_before, n_ref_before = len(stats), len(ref)
+	stats = stats[stats["chrom"].isin(autosomes)].reset_index(drop=True)
+	ref = ref[ref["chrom"].isin(autosomes)].reset_index(drop=True)
+	print(f"After autosome filter:")
+	print(f"  statSTR rows: {n_stats_before:,} -> {len(stats):,}")
+	print(f"  reference rows: {n_ref_before:,} -> {len(ref):,}")
+
 	# --- Sanity: no duplicate keys on either side ---
 	for name, df in [("statSTR file", stats), ("reference BED", ref)]:
 		dup_mask = df.duplicated(subset=KEY, keep=False)
