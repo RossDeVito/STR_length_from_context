@@ -117,6 +117,20 @@ def main():
 		# from the HipSTR reference, so every called locus should be in ref.
 		print("WARNING: some statSTR rows did not match the reference on "
 		      "(chrom, start); this should not happen for HipSTR calls.")
+
+		# Dump unmatched statSTR rows to a sibling file for troubleshooting.
+		stat_idx = pd.MultiIndex.from_frame(stats[["chrom", "start"]])
+		matched_idx = pd.MultiIndex.from_frame(merged[["chrom", "start"]])
+		unmatched = stats[~stat_idx.isin(matched_idx)].reset_index(drop=True)
+
+		out_path = args.out_file
+		stem, dot, ext = out_path.rpartition(".")
+		unmatched_path = (
+			f"{stem}.unmatched_statstr.{ext}" if dot
+			else f"{out_path}.unmatched_statstr"
+		)
+		unmatched.to_csv(unmatched_path, sep="\t", index=False)
+		print(f"Wrote {len(unmatched):,} unmatched statSTR rows to: {unmatched_path}")
 	else:
 		print("OK: all statSTR rows matched a reference locus on (chrom, start).")
 
