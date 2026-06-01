@@ -8,7 +8,7 @@
 set -euo pipefail
 
 BCFTOOLS=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/tools/bcftools-1.23.1/install/bin/bcftools
-VCF_DIR=/tscc/projects/ps-gymreklab/helia/ensembl/1000G_calls/hipstr/chrs
+VCF_DIR=/tscc/projects/ps-gymreklab/helia/ensembl/ensemble_in/hipstr
 OUT_DIR=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context/data/STR_data/HipSTR_data
 
 PER_CHROM_DIR=${OUT_DIR}/per_chrom_samples
@@ -19,7 +19,7 @@ INTER_FILE=${OUT_DIR}/all_samples_intersection.txt
 
 # Extract per-chromosome sample lists
 for CHR_NUM in $(seq 1 22); do
-	VCF=${VCF_DIR}/hipstr_corrected_chr${CHR_NUM}.vcf.gz
+	VCF=${VCF_DIR}/ensemble_input_chr${CHR_NUM}_hipstr_corrected.vcf.gz
 	OUT=${PER_CHROM_DIR}/chr${CHR_NUM}_samples.txt
 	echo "[$(date '+%H:%M:%S')] Extracting samples from chr${CHR_NUM}..."
 	${BCFTOOLS} query -l ${VCF} | sort > ${OUT}

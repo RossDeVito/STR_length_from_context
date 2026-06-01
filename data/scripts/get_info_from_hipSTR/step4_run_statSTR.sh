@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VCF_DIR=/tscc/projects/ps-gymreklab/helia/ensembl/1000G_calls/hipstr/chrs
+VCF_DIR=/tscc/projects/ps-gymreklab/helia/ensembl/ensemble_in/hipstr
 OUT_BASE=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context/data/STR_data/HipSTR_data
 SAMPLES_FILE=${OUT_BASE}/filtered_samples.txt
 PER_CHROM_DIR=${OUT_BASE}/per_chrom_statstr
@@ -21,7 +21,7 @@ mkdir -p ${PER_CHROM_DIR}
 
 # Per-chromosome statSTR
 for CHR_NUM in $(seq 1 22); do
-	VCF=${VCF_DIR}/hipstr_corrected_chr${CHR_NUM}.vcf.gz
+	VCF=${VCF_DIR}/ensemble_input_chr${CHR_NUM}_hipstr_corrected.vcf.gz
 	PREFIX=${PER_CHROM_DIR}/chr${CHR_NUM}
 	echo "[$(date '+%H:%M:%S')] statSTR on chr${CHR_NUM}..."
 	statSTR \
