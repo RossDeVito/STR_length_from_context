@@ -1,0 +1,1 @@
+wget https://storage.googleapis.com/basenji_barnyard2/sequences_human.bed

@@ -1,72 +1,71 @@
-"""Create and filter labeled STR dataset from EnsembleTR population data.
+"""Create labeled, filtered STR datasets for ML models from HipSTR/statSTR data
+with splits aligned to Caduceus/HyenaDNA/Basenji pretraining splits.
 
-Combines and replaces the previous create_ref_based_labeled_strs.py and
-remove_invalid_region_strs.py scripts, adapted to use EnsembleTR allele
-frequency data instead of HipSTR reference copy numbers.
+Population-level labels (heterozygosity, mode copy number, ...) are computed
+by statSTR and merged with the HipSTR reference, so this script reads the
+precomputed labels directly rather than computing them from allele
+frequencies.
+
+Input: the merged statSTR + HipSTR-reference table (1000G_HipSTR_stats.tsv)
+with columns:
+	chrom  start  end_ref  end_call  hipstr_name  motif  motif_len
+	ref_copy_number  het  mode  numcalled
+
+HipSTR reference / statSTR coordinates are 1-based fully-closed: the repeat
+tract spans 1-based positions [start, end_ref] inclusive, so tract length =
+end_ref - start + 1 = ref_copy_number * motif_len. We subtract 1 from start
+for 0-based pyfaidx extraction; str_start/str_end in the OUTPUT are 0-based
+half-open. We use `end_ref` (the canonical
+STR boundary) -- NOT `end_call`, which includes HipSTR's data-adaptive
+flanking extension and would break the perfect-repeat check.
 
 Pipeline:
-	1. Load EnsembleTR repeat_info and afreq_het tables.
-	2. Merge on locus ID.
-	3. Filter to specified motif length.
-	4. Compute pooled pan-human labels (equivalent to pooling all samples
-	   across populations and then computing stats): heterozygosity, and
-	   user-selected subset of {mean_copy_number, median_copy_number,
-	   mode_copy_number}.
-	5. Drop loci below a minimum total call count.
-	6. Drop loci missing calls in any population, to ensure pooled labels
-	   reflect genuinely pan-human diversity without pop-specific
-	   missingness confounds.
-	7. Verify perfect repeat in reference genome; drop imperfect.
-	8. Check sufficient flanking sequence; drop out-of-bounds.
-	9. Filter STRs overlapping mobile elements, segmental duplications,
+	1. Load merged statSTR/HipSTR table.
+	2. Filter to specified motif length (motif_len column).
+	3. Drop loci below a minimum call count (numcalled).
+	4. Verify perfect repeat in reference genome; drop imperfect.
+	5. Check boundaries don't truncate a longer tract; drop truncated.
+	6. Check sufficient flanking sequence; drop out-of-bounds.
+	7. Filter STRs overlapping mobile elements, segmental duplications,
 	   and ENCODE blacklist regions.
-	10. Assign chromosome-based train/val(chr13)/test(chr14) splits.
-	11. Duplicate each locus with a reverse complement entry in the same
-	    split.
+	8. Assign chromosome-based train/val/test splits or using segment based
+		pretraining splits (loci overlapping no pretraining interval default
+		to test).
+	9. Duplicate each locus with a reverse-complement entry in the same split.
+
+Labels carried through:
+	het       -> heterozygosity
+	mode      -> mode_copy_number
+	numcalled -> num_called_total
+	ref_copy_number is always carried through as-is.
 
 Output columns:
-	- ID: EnsembleTR locus identifier (chr:start-end)
+	- ID: HipSTR locus identifier (hipstr_name, e.g. Human_STR_3)
 	- chrom, str_start, str_end (0-based half-open), rev_comp, split
-	- num_called_total: pooled sample count across all populations
-	- heterozygosity: variability label
-	- {mean_copy_number, median_copy_number, mode_copy_number}: copy number
-	labels (subset per args)
+	- motif, ref_copy_number
+	- <carried label columns above>
 
 CLI arguments:
 	-s, --str-len: Motif length (e.g., 2 for dinucleotide). Required.
-	-f, --n-flanking: Minimum flanking bases required on each side of
-		the STR. Required.
-	--copy-number-stats: Comma-separated subset of {mean,median,mode}
-		copy number statistics to include as labels. At least one
-		required. Default: "median".
-	--min-num-called: Minimum total samples called (summed across
-		populations) for a locus to be kept. Guards against noisy labels
-		from low-N. Default 2000.
-	--repeat-info: Path to EnsembleTR repeat_info TSV.
-		Default: "../STR_data/EnsembleTR/repeat_info.tsv".
-	--afreq-het: Path to EnsembleTR afreq_het TSV.
-		Default: "../STR_data/EnsembleTR/afreq_het.tsv".
+	-f, --n-flanking: Minimum flanking bases required on each side. Required.
+	--min-num-called: Minimum samples called for a locus to be kept.
+		Default 2000.
+	--hipstr-stats: Path to merged statSTR/HipSTR-reference TSV.
+		Default: "../STR_data/HipSTR_data/1000G_HipSTR_stats.tsv".
 	--ref-genome: Path to reference genome FASTA.
-		Default: "../STR_data/reference_genome/
-		GRCh38_full_analysis_set_plus_decoy_hla.fa".
-	--mobile-elements-bed: Path to BED file with mobile element regions.
-		Default: "../invalid_regions/mobile_elements.bed.gz".
-	--seg-dups-bed: Path to BED file with segmental duplication regions.
-		Default: "../invalid_regions/seg_dups.bed.gz".
-	--blacklist-bed: Path to BED file with ENCODE blacklist regions.
-		Default: "../invalid_regions/blacklist.bed.gz".
+		Default: "../reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa".
+	--mobile-elements-bed / --seg-dups-bed / --blacklist-bed: invalid-region BEDs.
 	--output-dir: Directory to save filtered STR file.
-		Default: "../STR_data/ensembletr_labeled_strs/".
+		Default: "../STR_data/HipSTR_labeled_STRs/".
 
 Example usage:
-	python create_labeled_and_filtered_strs.py \\
+	python create_STR_data_files.py \\
 		--str-len 2 \\
-		--n-flanking 10000 \\
-		--copy-number-stats median
+		--n-flanking 10000
 """
 
 import os
-import json
+import sys
 import argparse
 import numpy as np
 import pandas as pd
@@ -75,7 +74,12 @@ import tqdm
 from pyfaidx import Fasta
 
 
-POPULATIONS = ['AFR', 'AMR', 'EAS', 'SAS', 'EUR', 'H3Africa']
+# Map statSTR / reference stat column names -> output label column names.
+LABEL_RENAME = {
+	"het": "heterozygosity",
+	"mode": "mode_copy_number",
+	"numcalled": "num_called_total",
+}
 
 
 # ======================================================================
@@ -84,7 +88,7 @@ POPULATIONS = ['AFR', 'AMR', 'EAS', 'SAS', 'EUR', 'H3Africa']
 
 def get_args():
 	parser = argparse.ArgumentParser(
-		description="Create labeled and filtered STR dataset from EnsembleTR."
+		description="Create labeled and filtered STR dataset from HipSTR/statSTR."
 	)
 
 	parser.add_argument(
@@ -98,38 +102,23 @@ def get_args():
 		help="Minimum flanking bases required on each side of the STR."
 	)
 	parser.add_argument(
-		"--copy-number-stats",
-		type=str, default="median",
-		help=(
-			"Comma-separated subset of {mean,median,mode} copy number "
-			"statistics to include as labels. At least one required."
-		)
-	)
-	parser.add_argument(
 		"--min-num-called",
 		type=int, default=2000,
 		help=(
-			"Minimum total samples called (summed across populations) for "
-			"a locus to be kept. Guards against noisy labels from low-N. "
-			"Default 2000."
+			"Minimum samples called (numcalled) for a locus to be kept. "
+			"Guards against noisy labels from low-N. Default 2000."
 		)
 	)
 
 	parser.add_argument(
-		"--repeat-info",
+		"--hipstr-stats",
 		type=str,
-		default="../STR_data/EnsembleTR/repeat_info.tsv",
-	)
-	parser.add_argument(
-		"--afreq-het",
-		type=str,
-		default="../STR_data/EnsembleTR/afreq_het.tsv",
+		default="../STR_data/HipSTR_data/1000G_HipSTR_stats.tsv",
 	)
 	parser.add_argument(
 		"--ref-genome",
 		type=str,
-		default="../STR_data/reference_genome/"
-		        "GRCh38_full_analysis_set_plus_decoy_hla.fa",
+		default="../reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa",
 	)
 
 	parser.add_argument(
@@ -147,99 +136,31 @@ def get_args():
 
 	parser.add_argument(
 		"--output-dir",
-		type=str, default="../STR_data/ensembletr_labeled_strs/",
+		type=str, default="../STR_data/HipSTR_labeled_STRs/",
 	)
 
-	args = parser.parse_args()
-
-	requested = [s.strip() for s in args.copy_number_stats.split(",") if s.strip()]
-	allowed = {"mean", "median", "mode"}
-	if not requested:
-		parser.error(
-			"--copy-number-stats must include at least one of mean/median/mode."
+	parser.add_argument(
+		"--split-mode",
+		type=str, default="chromosome",
+		choices=["chromosome", "pretraining"],
+		help=(
+			"How to assign train/val/test. 'chromosome': chr13=val, "
+			"chr14=test, rest=train. 'pretraining': assign by which "
+			"Caduceus/HyenaDNA pretraining-split interval each locus's "
+			"flanking window overlaps (priority train > val > test; loci "
+			"whose window overlaps no interval default to test)."
 		)
-	bad = [s for s in requested if s not in allowed]
-	if bad:
-		parser.error(
-			f"Invalid --copy-number-stats entries: {bad}. Allowed: {allowed}."
+	)
+	parser.add_argument(
+		"--pretraining-split-bed",
+		type=str, default="../reference_genome/sequences_human.bed",
+		help=(
+			"BED of pretraining splits (chrom, start, end, split) with split "
+			"in {train, valid, test}. Required for --split-mode pretraining."
 		)
-	args.copy_number_stats = requested
+	)
 
-	return args
-
-
-# ======================================================================
-# Label computation
-# ======================================================================
-
-def parse_afreq_dict(s):
-	"""Return dict of {allele_float: freq_float} or None if empty/missing."""
-	if pd.isna(s) or s == "" or s == "{}":
-		return None
-	d = json.loads(s)
-	if len(d) == 0:
-		return None
-	return {float(k): float(v) for k, v in d.items()}
-
-
-def pool_afreq(row, populations):
-	"""Pool across populations weighted by numcalled.
-
-	Equivalent to pooling all samples and then computing frequencies.
-	Returns (alleles, freqs, total_called). If no pop has calls, returns
-	(None, None, 0).
-	"""
-	pooled = {}
-	total_called = 0
-
-	for pop in populations:
-		n = row[f'numcalled_{pop}']
-		if pd.isna(n) or n == 0:
-			continue
-		freqs_dict = parse_afreq_dict(row[f'afreq_{pop}'])
-		if freqs_dict is None:
-			continue
-		for allele, freq in freqs_dict.items():
-			pooled[allele] = pooled.get(allele, 0.0) + freq * n
-		total_called += int(n)
-
-	if total_called == 0 or not pooled:
-		return None, None, 0
-
-	alleles = np.array(list(pooled.keys()), dtype=float)
-	freqs = np.array(list(pooled.values()), dtype=float) / total_called
-	return alleles, freqs, total_called
-
-
-def heterozygosity(freqs):
-	if freqs is None:
-		return np.nan
-	return float(1.0 - np.sum(freqs ** 2))
-
-
-def mean_copy_number(alleles, freqs):
-	if alleles is None:
-		return np.nan
-	return float(np.sum(alleles * freqs))
-
-
-def median_copy_number(alleles, freqs):
-	if alleles is None:
-		return np.nan
-	order = np.argsort(alleles)
-	sorted_alleles = alleles[order]
-	sorted_freqs = freqs[order]
-	cum = np.cumsum(sorted_freqs)
-	idx = min(int(np.searchsorted(cum, 0.5)), len(sorted_alleles) - 1)
-	return float(sorted_alleles[idx])
-
-
-def mode_copy_number(alleles, freqs):
-	if alleles is None:
-		return np.nan
-	max_freq = freqs.max()
-	tied = alleles[freqs == max_freq]
-	return float(tied.min())
+	return parser.parse_args()
 
 
 # ======================================================================
@@ -281,14 +202,14 @@ class GenomicIntersector:
 				np.array(merged_starts), np.array(merged_ends)
 			)
 
-	def check_overlaps(self, query_df):
+	def check_overlaps(self, query_df, start_col="str_start", end_col="str_end"):
 		result = np.zeros(len(query_df), dtype=bool)
 		for chrom, group in query_df.groupby("chrom"):
 			if chrom not in self.chrom_intervals:
 				continue
 			ref_starts, ref_ends = self.chrom_intervals[chrom]
-			q_starts = group["str_start"].values
-			q_ends = group["str_end"].values
+			q_starts = group[start_col].values
+			q_ends = group[end_col].values
 
 			idx = np.searchsorted(ref_ends, q_starts, side='right')
 			valid_mask = idx < len(ref_starts)
@@ -298,6 +219,25 @@ class GenomicIntersector:
 			)
 			result[group.index] = overlap_mask
 		return result
+
+
+# ======================================================================
+# Helpers
+# ======================================================================
+
+def revcomp(s):
+	return s.translate(str.maketrans("ACGT", "TGCA"))[::-1]
+
+
+def fmt_labels(row, label_cols):
+	parts = []
+	for lc in label_cols:
+		val = row[lc]
+		if isinstance(val, (float, np.floating)):
+			parts.append(f"{lc}={val:.3f}")
+		else:
+			parts.append(f"{lc}={val}")
+	return ", ".join(parts)
 
 
 # ======================================================================
@@ -311,94 +251,58 @@ if __name__ == "__main__":
 	print(f"Settings:")
 	print(f"  STR motif length:   {args.str_len}")
 	print(f"  Flanking required:  {args.n_flanking}")
-	print(f"  Copy number stats:  {args.copy_number_stats}")
 	print(f"  Min num_called:     {args.min_num_called}")
 
 	# ------------------------------------------------------------------
-	# Load and merge EnsembleTR tables
+	# Load merged statSTR / HipSTR-reference table
 	# ------------------------------------------------------------------
-	print("\nLoading EnsembleTR tables...")
-	info_df = pd.read_csv(args.repeat_info, sep="\t")
-	print(f"  repeat_info: {len(info_df)} loci")
-	calls_df = pd.read_csv(args.afreq_het, sep="\t")
-	print(f"  afreq_het:   {len(calls_df)} loci")
+	print("\nLoading HipSTR/statSTR table...")
+	str_df = pd.read_csv(args.hipstr_stats, sep="\t", dtype={"chrom": str})
+	print(f"  loaded: {len(str_df)} loci")
 
-	call_cols = ['ID']
-	for pop in POPULATIONS:
-		call_cols += [f'afreq_{pop}', f'het_{pop}', f'numcalled_{pop}']
+	required = {"chrom", "start", "end_ref", "motif", "motif_len",
+	            "ref_copy_number", "numcalled"}
+	missing = required - set(str_df.columns)
+	if missing:
+		sys.exit(f"ERROR: input missing required columns: {missing}\n"
+		         f"Got: {list(str_df.columns)}")
 
-	str_df = info_df.merge(calls_df[call_cols], on='ID', how='inner')
-	print(f"  merged:      {len(str_df)} loci")
+	# Carry through whichever label columns are present, renamed to output names.
+	present = {c: LABEL_RENAME[c] for c in LABEL_RENAME if c in str_df.columns}
+	str_df = str_df.rename(columns=present)
+	label_cols = list(present.values())
+	print(f"  label columns carried: {label_cols}")
+	if "num_called_total" not in label_cols:
+		sys.exit("ERROR: 'numcalled' column required for the min-call filter.")
 
 	# ------------------------------------------------------------------
 	# Filter to requested motif length
 	# ------------------------------------------------------------------
-	str_df['motif_len'] = str_df['Motif'].str.len()
-	str_df = str_df[str_df['motif_len'] == args.str_len].reset_index(drop=True)
-	print(f"\nAfter motif length == {args.str_len} filter: {len(str_df)}")
+	str_df = str_df[str_df["motif_len"] == args.str_len].reset_index(drop=True)
+	print(f"\nAfter motif_len == {args.str_len} filter: {len(str_df)}")
 	if str_df.empty:
 		print("No loci remaining. Exiting.")
-		exit()
+		sys.exit()
 
 	# ------------------------------------------------------------------
-	# Require calls in all populations
-	# ------------------------------------------------------------------
-	before = len(str_df)
-	all_pops_called = pd.Series(True, index=str_df.index)
-	for pop in POPULATIONS:
-		all_pops_called &= (str_df[f'numcalled_{pop}'] > 0)
-	str_df = str_df[all_pops_called].reset_index(drop=True)
-	print(f"\nAfter requiring calls in all {len(POPULATIONS)} pops: "
-	      f"{len(str_df)} (dropped {before - len(str_df)})")
-	if str_df.empty:
-		print("No loci remaining. Exiting.")
-		exit()
-
-	# ------------------------------------------------------------------
-	# Compute pooled labels
-	# ------------------------------------------------------------------
-	print("\nComputing pooled labels...")
-	pooled = [pool_afreq(row, POPULATIONS) for _, row in tqdm.tqdm(
-		str_df.iterrows(), total=len(str_df)
-	)]
-	alleles_list = [p[0] for p in pooled]
-	freqs_list = [p[1] for p in pooled]
-	total_called = [p[2] for p in pooled]
-
-	str_df['num_called_total'] = total_called
-	str_df['heterozygosity'] = [heterozygosity(f) for f in freqs_list]
-	if 'mean' in args.copy_number_stats:
-		str_df['mean_copy_number'] = [
-			mean_copy_number(a, f) for a, f in zip(alleles_list, freqs_list)
-		]
-	if 'median' in args.copy_number_stats:
-		str_df['median_copy_number'] = [
-			median_copy_number(a, f) for a, f in zip(alleles_list, freqs_list)
-		]
-	if 'mode' in args.copy_number_stats:
-		str_df['mode_copy_number'] = [
-			mode_copy_number(a, f) for a, f in zip(alleles_list, freqs_list)
-		]
-
-	# ------------------------------------------------------------------
-	# Minimum total samples called
+	# Minimum samples called
 	# ------------------------------------------------------------------
 	print(f"\nnum_called_total distribution:")
 	print(f"  min:    {int(str_df['num_called_total'].min())}")
 	print(f"  median: {int(str_df['num_called_total'].median())}")
 	print(f"  max:    {int(str_df['num_called_total'].max())}")
-	
+
 	before = len(str_df)
 	str_df = str_df[
-		str_df['num_called_total'] >= args.min_num_called
+		str_df["num_called_total"] >= args.min_num_called
 	].reset_index(drop=True)
-	print(f"\nAfter min_num_called >= {args.min_num_called}: "
+	print(f"\nAfter num_called_total >= {args.min_num_called}: "
 	      f"{len(str_df)} (dropped {before - len(str_df)})")
 	if str_df.empty:
 		print("No loci remaining. Exiting.")
-		exit()
+		sys.exit()
 
-# ------------------------------------------------------------------
+	# ------------------------------------------------------------------
 	# Verify perfect repeat in reference genome + flanking bounds
 	# ------------------------------------------------------------------
 	print("\nChecking perfect repeat and flanking bounds in reference...")
@@ -414,15 +318,15 @@ if __name__ == "__main__":
 	MAX_DIAG_PRINTS = 10
 
 	for _, row in tqdm.tqdm(str_df.iterrows(), total=len(str_df)):
-		chrom = row["Chrom"]
-		start_idx = int(row["Start"]) - 1
-		end_idx = int(row["End"])
+		chrom = row["chrom"]
+		start_idx = int(row["start"]) - 1  # HipSTR coords are 1-based; -1 -> 0-based
+		end_idx = int(row["end_ref"])      # 1-based inclusive end == 0-based exclusive
 
 		str_seq = ref_genome[chrom][start_idx:end_idx]
 		str_region_len = end_idx - start_idx
 
-		motif = row["Motif"]
-		k = len(motif)
+		motif = row["motif"]
+		k = int(row["motif_len"])          # key off motif_len, not len(motif)
 
 		# Derive base motif from the reference sequence itself, which
 		# automatically captures whatever rotation/strand the locus is in.
@@ -440,15 +344,12 @@ if __name__ == "__main__":
 				pre_ctx = ref_genome[chrom][pre_start:start_idx].seq
 				post_ctx = ref_genome[chrom][end_idx:post_end].seq
 				print(f"\n  INTERNAL IMPERFECT example "
-				      f"{internal_imperfect_count}: {row['ID']}")
-				print(f"    Motif col: {motif}")
+				      f"{internal_imperfect_count}: {row['hipstr_name']}")
+				print(f"    motif col: {motif}")
 				print(f"    base_motif from ref (first {k}): {base_motif}")
 				print(f"    coords: {start_idx}-{end_idx}  "
 				      f"(len {str_region_len})")
-				print(f"    median copy number: {row['median_copy_number']:.2f}"
-				      if 'median_copy_number' in row.index
-				      else f"    median copy number: (not computed)")
-				print(f"    heterozygosity:     {row['heterozygosity']:.3f}")
+				print(f"    labels: {fmt_labels(row, label_cols)}")
 				print(f"    pre-flank:  ...{pre_ctx}")
 				print(f"    str_seq:       {str_seq.seq}")
 				print(f"    expected:      {expected}")
@@ -488,19 +389,16 @@ if __name__ == "__main__":
 				pre_ctx = ref_genome[chrom][pre_start:start_idx].seq
 				post_ctx = ref_genome[chrom][end_idx:post_end].seq
 				print(f"\n  BOUNDARY TRUNCATION example "
-				      f"{boundary_truncation_count}: {row['ID']}  "
+				      f"{boundary_truncation_count}: {row['hipstr_name']}  "
 				      f"({extend_side})")
-				print(f"    Motif col: {motif}")
+				print(f"    motif col: {motif}")
 				print(f"    base_motif from ref (first {k}): {base_motif}")
 				print(f"    coords: {start_idx}-{end_idx}  "
 				      f"(len {str_region_len})")
 				print(f"    repeat continues {extend_side}ward: "
 				      f"base {extend_base!r} matches expected "
 				      f"{extend_expected!r}")
-				print(f"    median copy number: {row['median_copy_number']:.2f}"
-				      if 'median_copy_number' in row.index
-				      else f"    median copy number: (not computed)")
-				print(f"    heterozygosity:     {row['heterozygosity']:.3f}")
+				print(f"    labels: {fmt_labels(row, label_cols)}")
 				print(f"    pre-flank:  ...{pre_ctx}")
 				print(f"    str_seq:       {str_seq.seq}")
 				print(f"    post-flank: {post_ctx}...")
@@ -513,16 +411,18 @@ if __name__ == "__main__":
 
 		# --- One-time integrity check ---
 		if not first_check_done:
-			def revcomp(s):
-				return s.translate(str.maketrans("ACGT", "TGCA"))[::-1]
 			valid_representations = set()
-			for m in (motif, revcomp(motif)):
-				for i in range(k):
-					valid_representations.add(m[i:] + m[:i])
-			if base_motif not in valid_representations:
+			for variant in str(motif).split("/"):  # handle multi-motif strings
+				if len(variant) != k:
+					continue
+				for m in (variant, revcomp(variant)):
+					for i in range(k):
+						valid_representations.add(m[i:] + m[:i])
+			if valid_representations and base_motif not in valid_representations:
 				raise ValueError(
-					f"Base motif {base_motif!r} from reference at {row['ID']} "
-					f"is not a rotation/RC of Motif column {motif!r}."
+					f"Base motif {base_motif!r} from reference at "
+					f"{row['hipstr_name']} is not a rotation/RC of motif "
+					f"column {motif!r}."
 				)
 
 			pre = ref_genome[chrom][start_idx - args.n_flanking:start_idx]
@@ -533,24 +433,20 @@ if __name__ == "__main__":
 			reconstructed = pre.seq + str_seq.seq + post.seq
 			if reconstructed != gt.seq:
 				raise ValueError(
-					f"Sequence reconstruction failed at {row['ID']}."
+					f"Sequence reconstruction failed at {row['hipstr_name']}."
 				)
-			print(f"  integrity check passed on {row['ID']} "
-			      f"(base motif from ref: {base_motif}, Motif col: {motif})")
+			print(f"  integrity check passed on {row['hipstr_name']} "
+			      f"(base motif from ref: {base_motif}, motif col: {motif})")
 			first_check_done = True
 
 		kept_rows.append({
-			"ID": row["ID"],
+			"ID": row["hipstr_name"],
 			"chrom": chrom,
 			"str_start": start_idx,
 			"str_end": end_idx,
 			"motif": motif,
-			"num_called_total": row["num_called_total"],
-			"heterozygosity": row["heterozygosity"],
-			**{
-				f"{stat}_copy_number": row[f"{stat}_copy_number"]
-				for stat in args.copy_number_stats
-			},
+			"ref_copy_number": row["ref_copy_number"],
+			**{lc: row[lc] for lc in label_cols},
 		})
 
 	print(f"\n  internal imperfect:  {internal_imperfect_count}")
@@ -560,7 +456,7 @@ if __name__ == "__main__":
 
 	if not kept_rows:
 		print("No STRs remaining. Exiting.")
-		exit()
+		sys.exit()
 
 	str_df = pd.DataFrame(kept_rows)
 
@@ -634,20 +530,68 @@ if __name__ == "__main__":
 	).reset_index(drop=True)
 
 	# ------------------------------------------------------------------
-	# Chromosome-based splits
+	# Splits
 	# ------------------------------------------------------------------
-	chrom_to_split = {
-		"chr14": "test",
-		"chr13": "val",
-	}
-	str_df["split"] = str_df["chrom"].map(
-		lambda c: chrom_to_split.get(c, "train")
-	)
+	if args.split_mode == "chromosome":
+		# Whole-chromosome: chr13=val, chr14=test, rest=train.
+		chrom_to_split = {
+			"chr14": "test",
+			"chr13": "val",
+		}
+		str_df["split"] = str_df["chrom"].map(
+			lambda c: chrom_to_split.get(c, "train")
+		)
+	else:
+		# Pretraining-aligned: assign each locus by which pretraining-split
+		# interval its FLANKING WINDOW (STR +/- n_flanking) overlaps, with
+		# priority train > val > test. This guarantees a 'test' locus's
+		# window never overlapped a pretraining train (or val) interval, i.e.
+		# its flanks were never seen during Caduceus pretraining. Loci whose
+		# window overlaps no interval at all are labeled 'none'.
+		print("\nLoading pretraining split BED...")
+		pre_df = pd.read_csv(
+			args.pretraining_split_bed, sep="\t", header=None,
+			names=["chrom", "start", "end", "split"],
+			dtype={"chrom": str},
+		)
+		pre_df["split"] = pre_df["split"].replace({"valid": "val"})
+		print("  pretraining-split interval counts:")
+		print(pre_df["split"].value_counts().to_string())
+
+		# Flanking window the model actually sees (in-bounds guaranteed by
+		# the earlier flanking check).
+		str_df["window_start"] = str_df["str_start"] - args.n_flanking
+		str_df["window_end"] = str_df["str_end"] + args.n_flanking
+
+		split_searchers = {
+			s: GenomicIntersector(
+				pre_df[pre_df["split"] == s][["chrom", "start", "end"]], s
+			)
+			for s in ["train", "val", "test"]
+		}
+		ov = {
+			s: split_searchers[s].check_overlaps(
+				str_df, start_col="window_start", end_col="window_end"
+			)
+			for s in ["train", "val", "test"]
+		}
+
+		# Priority train > val > test (assign least-strict first, then
+		# overwrite with stricter). Loci whose window overlaps no
+		# pretraining-split interval default to 'test' -- their flanks were
+		# never seen during pretraining, so they are safe to evaluate on.
+		split = np.full(len(str_df), "test", dtype=object)
+		split[ov["test"]] = "test"
+		split[ov["val"]] = "val"
+		split[ov["train"]] = "train"
+		str_df["split"] = split
+
+		str_df = str_df.drop(columns=["window_start", "window_end"])
 
 	print(f"\nSplit counts:")
-	print(str_df["split"].value_counts())
+	print(str_df["split"].value_counts().to_string())
 	print(f"\nSplit fractions:")
-	print(str_df["split"].value_counts() / len(str_df))
+	print((str_df["split"].value_counts() / len(str_df)).to_string())
 
 	# ------------------------------------------------------------------
 	# Add reverse-complement entries
@@ -658,16 +602,14 @@ if __name__ == "__main__":
 	final_df = pd.concat([str_df, rc_df], ignore_index=True)
 
 	# ------------------------------------------------------------------
-	# 10. Save
+	# Save
 	# ------------------------------------------------------------------
 	if not os.path.exists(args.output_dir):
 		os.makedirs(args.output_dir)
 
-	stats_str = "-".join(args.copy_number_stats)
 	out_name = (
 		f"str_len_{args.str_len}"
-		f"_n_flanking_{args.n_flanking}"
-		f"_stats_{stats_str}.tsv"
+		f"_n_flanking_{args.n_flanking}.tsv"
 	)
 	out_path = os.path.join(args.output_dir, out_name)
 	final_df.to_csv(out_path, sep="\t", index=False)

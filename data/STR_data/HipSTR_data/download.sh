@@ -1,0 +1,1 @@
+wget https://zenodo.org/records/20499952/files/1000G_HipSTR_stats.tsv?download=1 -O 1000G_HipSTR_stats.tsv
