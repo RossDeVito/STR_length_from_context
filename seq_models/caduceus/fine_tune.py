@@ -140,7 +140,8 @@ if __name__ == "__main__":
 	requested_precision = config.get("precision", "32-true")
 	if "bf16" in requested_precision and not args.cpu:
 		if torch.cuda.is_available():
-			if torch.cuda.is_bf16_supported(including_emulation=False):
+			# `including_emulation` only exists on newer torch; keep it simple/portable.
+			if torch.cuda.is_bf16_supported():
 				print(f"Hardware supports BF16. Using: {requested_precision}")
 			else:
 				print("Hardware does NOT support BF16; downgrading to '16-mixed'.")
