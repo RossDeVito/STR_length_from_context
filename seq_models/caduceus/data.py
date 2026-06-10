@@ -5,7 +5,8 @@ Requires a TSV file with columns:
 - chrom: Chromosome name (e.g., 'chr1')
 - str_start: Start index of the STR (0-based, half-open)
 - str_end: End index of the STR (first base after the STR)
-- motif: Repeat unit sequence (e.g., 'AC'); its length sets the tiling unit size
+- motif: Repeat unit sequence (e.g., 'AC'). May be blank; the tiling unit length
+  is derived from the coordinates and ref_copy_number, not from this string.
 - rev_comp: Boolean indicating if sequence should be reverse complemented
 - split: One of 'train', 'val', or 'test' indicating data split
 - One column per regression target (defaults: 'mode_copy_number' for length,
@@ -16,9 +17,10 @@ see data/STR_data/reference_genome/download.sh).
 
 Unlike the HyenaDNA soft-prompt pipeline this module is built for full
 fine-tuning of Caduceus-Ph:
-- The STR boundary is synthesized by tiling the motif to `n_str_bp` bases on
-  each side rather than copying real STR bases, so the emitted length never
-  reveals the true tract length (no leakage, no validity check needed).
+- The STR boundary is synthesized by tiling the reference repeat unit to
+  `n_str_bp` bases on each side rather than copying real STR bases, so the
+  emitted length never reveals the true tract length (no leakage, no validity
+  check needed).
 - Learnable tokens can be placed at the sequence start, in the STR gap, and at
   the sequence end. Their ids start just past the tokenizer vocab; the model
   must resize its embedding matrix to match (handled in a later step).
@@ -136,6 +138,7 @@ class STRLengthDataset(Dataset):
 		tokenizer,
 		n_flanking_bp,
 		n_str_bp,
+		motif_len,
 		prompt_start_id,
 		n_prefix_prompt_tokens,
 		n_str_prompt_tokens,
@@ -150,6 +153,8 @@ class STRLengthDataset(Dataset):
 			tokenizer (transformers.PreTrainedTokenizer): Tokenizer to use.
 			n_flanking_bp (int): Flanking base pairs on each side of the STR.
 			n_str_bp (int): Synthesized motif-tiled base pairs on each side.
+			motif_len (int): Repeat-unit length shared by all loci in the file;
+				sets how many reference bases form the tiled unit.
 			prompt_start_id (int): First id used for learnable tokens (just past
 				the tokenizer vocab).
 			n_prefix_prompt_tokens (int): Learnable tokens at sequence start.
@@ -163,6 +168,7 @@ class STRLengthDataset(Dataset):
 		self.tokenizer = tokenizer
 		self.n_flanking_bp = n_flanking_bp
 		self.n_str_bp = n_str_bp
+		self.motif_len = motif_len
 		self.targets = dict(targets)
 
 		# Do NOT initialize Fasta here.
@@ -212,7 +218,9 @@ class STRLengthDataset(Dataset):
 		chrom = row["chrom"]
 		start = row["str_start"]
 		end = row["str_end"]
-		motif_len = len(row["motif"])
+		# Repeat-unit length is a per-file constant (derived once in the
+		# DataModule from coordinates + ref_copy_number), not the 'motif' string.
+		motif_len = self.motif_len
 
 		# Flanks (real reference sequence) up to, but not into, the STR.
 		left_flank = self.ref_genome[chrom][
@@ -325,6 +333,36 @@ class STRLengthDataModule(pl.LightningDataModule):
 			sep="\t"
 		)
 
+		# Every locus in a file shares one repeat-unit length (each file is built
+		# for a single STR motif length, 1 or 2). Derive that single length from
+		# the coordinates and reference copy number -- not the 'motif' string,
+		# which is blank for a few source loci -- since for every locus
+		# str_end - str_start == ref_copy_number * motif_len.
+		unit_lens = (
+			(full_df["str_end"] - full_df["str_start"])
+			/ full_df["ref_copy_number"]
+		).round().astype(int)
+
+		# Cross-check once: the derived length must be uniform across the file and
+		# equal the length of every 'motif' string that is present.
+		motif_str = full_df["motif"].astype(str).str.strip()
+		present = full_df["motif"].notna() & (motif_str != "")
+		if unit_lens.nunique() != 1 or (
+			motif_str[present].str.len() != unit_lens[present]
+		).any():
+			raise ValueError(
+				"Inconsistent repeat-unit length: derived "
+				f"{sorted(unit_lens.unique())} from coordinates/ref_copy_number, "
+				f"present motif lengths "
+				f"{sorted(motif_str[present].str.len().unique())}."
+			)
+		motif_len = int(unit_lens.iloc[0])
+		print(
+			f"Using motif_len={motif_len} (derived from coordinates and "
+			f"ref_copy_number; consistent with {int(present.sum())} labeled "
+			f"motif(s), {int((~present).sum())} blank)."
+		)
+
 		train_df = full_df[full_df["split"] == "train"].reset_index(drop=True)
 		val_df = full_df[full_df["split"] == "val"].reset_index(drop=True)
 		test_df = full_df[full_df["split"] == "test"].reset_index(drop=True)
@@ -341,6 +379,7 @@ class STRLengthDataModule(pl.LightningDataModule):
 			"tokenizer": self.tokenizer,
 			"n_flanking_bp": self.hparams.n_flanking_bp,
 			"n_str_bp": self.hparams.n_str_bp,
+			"motif_len": motif_len,
 			"prompt_start_id": self.prompt_start_id,
 			"n_prefix_prompt_tokens": self.hparams.n_prefix_prompt_tokens,
 			"n_str_prompt_tokens": self.hparams.n_str_prompt_tokens,

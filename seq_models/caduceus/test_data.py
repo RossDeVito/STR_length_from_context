@@ -70,6 +70,7 @@ def _write_fixtures(tmp_path):
 				"chrom": "chr1",
 				"str_start": STR_START,
 				"str_end": STR_END,
+				"ref_copy_number": 3.5,  # 7 bp tract / motif_len 2
 				"motif": "AT",
 				"mode_copy_number": 5.0,
 				"heterozygosity": 0.25,
@@ -81,6 +82,7 @@ def _write_fixtures(tmp_path):
 				"chrom": "chr1",
 				"str_start": STR_START,
 				"str_end": STR_END,
+				"ref_copy_number": 3.5,  # 7 bp tract / motif_len 2
 				"motif": "AT",
 				"mode_copy_number": 5.0,
 				"heterozygosity": 0.25,
@@ -263,7 +265,7 @@ def test_real_labeled_file_is_compatible_with_datamodule(fname):
 	# The schema our Dataset/DataModule depends on (default target columns).
 	df = pd.read_csv(data_path, sep="\t")
 	required = {
-		"ID", "chrom", "str_start", "str_end", "motif",
+		"ID", "chrom", "str_start", "str_end", "motif", "ref_copy_number",
 		"mode_copy_number", "heterozygosity", "split", "rev_comp",
 	}
 	assert required <= set(df.columns)
