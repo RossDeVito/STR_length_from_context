@@ -360,6 +360,9 @@ def test_end_to_end_short_fit_with_fake_backbone(tmp_path, monkeypatch):
 # --- Real backbone (skip-guarded; runs only where mamba kernels exist) ---------
 
 def test_real_backbone_forward_shapes():
+	# Caduceus uses Triton/Mamba CUDA kernels, so this only runs on a GPU.
+	if not torch.cuda.is_available():
+		pytest.skip("Caduceus backbone needs a CUDA GPU (Triton/Mamba kernels).")
 	try:
 		model = create_model({
 			"n_prefix_prompt_tokens": 2,
@@ -371,7 +374,7 @@ def test_real_backbone_forward_shapes():
 	except Exception as exc:  # mamba_ssm / backbone unavailable -> skip
 		pytest.skip(f"Caduceus backbone unavailable: {exc}")
 
-	model.eval()
-	out = model(_FAKE_INPUT_IDS)
+	model = model.to("cuda").eval()
+	out = model(_FAKE_INPUT_IDS.to("cuda"))
 	assert set(out.keys()) == {"length", "variation"}
 	assert out["length"].shape == (2,)
