@@ -1,22 +1,23 @@
 # GPU Python deps for the Caduceus-Ph stack. Installed by setup_gpu_env.sh.
 #
-# The mamba-ssm / causal-conv1d CUDA kernels are NOT listed here: setup_gpu_env.sh
-# BUILDS them from source against the torch below. Building locally makes the
-# kernels' C++ ABI match your torch automatically (the prebuilt wheels do not
-# offer a matching abiFALSE + torch-2.5 + cpp_functions combo) and enables
-# Mamba's fused fast path.
+# Uses PREBUILT mamba-ssm + causal-conv1d wheels (no compiling, no CUDA module).
+# torch 2.6 is used because BOTH mamba-ssm and causal-conv1d publish matched,
+# fused-capable cu12torch2.6 wheels in both C++ ABIs — so a wheel always matches
+# torch's ABI. (torch 2.5 had no abiFALSE causal wheel with the cpp_functions API,
+# which is what forced the painful source-build path; torch 2.6 avoids that.)
 #
-# Assumes Python 3.11 and a CUDA 12.x toolkit (nvcc) available for the source
-# build. Install order matters (torch first, then the kernels) — that's why the
-# kernels live in the script, not in this file.
+# The kernel wheels are installed by setup_gpu_env.sh (their URL depends on
+# torch's detected ABI), not listed here.
+#
+# Assumes Python 3.11 and a driver supporting CUDA 12.4 (TSCC A100 / driver 580 does).
 
-# --- PyTorch (CUDA 12.1 build; runs on TSCC A100, driver 580 supports up to CUDA 13) ---
---extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.5.1+cu121
+# --- PyTorch (CUDA 12.4 build) ---
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
 
 # --- transformers 4.x ---
 # The Caduceus trust_remote_code modeling/tokenizer targets ~4.38 and isn't
-# updated for the transformers 5.x major release; 4.44.2 also supports numpy 2.x.
+# updated for transformers 5.x; 4.44.2 also supports numpy 2.x.
 transformers==4.44.2
 
 # --- Everything else (numpy, pandas, lightning, captum, ...) ---

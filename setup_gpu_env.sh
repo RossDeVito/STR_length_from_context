@@ -1,26 +1,39 @@
 #!/usr/bin/env bash
 # GPU setup for the Caduceus-Ph stack, run INSIDE an already-active conda env.
 #
-# Builds mamba-ssm + causal-conv1d FROM SOURCE against the env's torch. Compiling
-# locally makes the kernels' C++ ABI match torch automatically (the prebuilt
-# wheels have no matching abiFALSE + torch-2.5 + cpp_functions combo) and pip
-# resolves a mutually-compatible mamba/causal pair, so Mamba's fused fast path
-# works.
+# Uses PREBUILT mamba-ssm + causal-conv1d wheels matched to torch's C++ ABI.
+# NO CUDA module, NO nvcc, NO compiling. torch 2.6 is used because both projects
+# publish matched fused-capable cu12torch2.6 wheels in both ABIs (torch 2.5 did
+# not, which is what forced the source build before).
 #
 # PREREQUISITES (on a GPU node, from the repo root):
-#   1. Your target conda env (python 3.11) is ACTIVE:  conda activate <env>
-#   2. A CUDA 12.x toolkit is loaded so `nvcc` is on PATH. On TSCC:
-#          module load cuda12.0/toolkit/12.0.1
-#      (You don't need this to RUN torch — only to COMPILE these kernels.)
+#   - Your target conda env (python 3.11) is ACTIVE:  conda activate <env>
+#   - Driver supports CUDA 12.4 (TSCC A100 / driver 580 does).
+#   - You do NOT need 'module load cuda'. (If one is loaded, this script still
+#     works — it forces torch's own libs ahead of any system CUDA libs.)
 #
-# Usage:
-#   bash setup_gpu_env.sh
-#
-# Optional env vars:
-#   MAX_JOBS   parallel compile jobs (default 4; lower if the build OOMs)
+# Usage:  bash setup_gpu_env.sh
 
 set -eo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Matched, fused-capable pair (both expose causal-conv1d's cpp_functions API).
+# TORCH_TAG must match the torch version pinned in requirements_gpu.txt.
+MAMBA_VER="2.3.2.post1"
+CAUSAL_VER="1.6.2.post1"
+TORCH_TAG="cu12torch2.6"
+
+# Locate torch's bundled lib dirs WITHOUT importing torch (torch may fail to
+# import while a system CUDA module shadows its libs).
+_torch_libdirs() {
+	local sp ld d
+	sp="$(ls -d "${CONDA_PREFIX}"/lib/python*/site-packages 2>/dev/null | head -1 || true)"
+	ld="${sp}/torch/lib"
+	for d in "${sp}"/nvidia/*/lib; do
+		[ -d "${d}" ] && ld="${ld}:${d}"
+	done
+	printf '%s' "${ld}"
+}
 
 echo "==> Checking prerequisites"
 if [ -z "${CONDA_PREFIX:-}" ]; then
@@ -28,66 +41,41 @@ if [ -z "${CONDA_PREFIX:-}" ]; then
 	exit 1
 fi
 echo "    active env: ${CONDA_PREFIX}"
-if ! command -v nvcc >/dev/null; then
-	echo "ERROR: nvcc not found. Load a CUDA 12.x toolkit, e.g. on TSCC:"
-	echo "         module load cuda12.0/toolkit/12.0.1"
-	exit 1
-fi
-NVCC_MAJOR="$(nvcc --version | grep -oP 'release \K[0-9]+' | head -1)"
-if [ "${NVCC_MAJOR}" != "12" ]; then
-	echo "ERROR: nvcc is CUDA ${NVCC_MAJOR}.x, but torch is built for cu121."
-	echo "       Load a 12.x toolkit so the compiled extensions match torch's CUDA major."
-	exit 1
-fi
-echo "    nvcc $(nvcc --version | grep -oP 'release \K[0-9.]+' | head -1) OK"
 
 echo "==> Installing torch + transformers + project deps"
 python -m pip install --upgrade pip
 python -m pip install -r "${REPO_ROOT}/requirements_gpu.txt"
 
-# Compute torch's bundled lib dirs (torch/lib + the pip nvidia/*/lib packages).
-_torch_libdirs() {
-	python -c '
-import os, glob, torch
-sp = os.path.dirname(os.path.dirname(torch.__file__))
-d = [os.path.join(os.path.dirname(torch.__file__), "lib")]
-d += sorted(glob.glob(os.path.join(sp, "nvidia", "*", "lib")))
-print(":".join(d))
-'
-}
-
-echo "==> Prepending torch's bundled CUDA libs to LD_LIBRARY_PATH"
-# A loaded CUDA toolkit module (for nvcc) puts the SYSTEM CUDA libs on
-# LD_LIBRARY_PATH, which can shadow torch's bundled cu121 libs and cause an
-# nvJitLink/cusparse "undefined symbol" at `import torch`. Putting torch's libs
-# FIRST makes torch use its own matching libs (nvcc still comes from the module).
+echo "==> Putting torch's bundled CUDA libs first on LD_LIBRARY_PATH"
+# Ensures 'import torch' below works even if a system CUDA module is loaded.
 export LD_LIBRARY_PATH="$(_torch_libdirs):${LD_LIBRARY_PATH:-}"
 
-echo "==> Building causal-conv1d and mamba-ssm from source (ABI matches torch)"
-# Remove any prebuilt installs so pip actually rebuilds from the PyPI sdist.
+echo "==> Selecting prebuilt mamba/causal wheels matching torch's ABI"
+ABI="$(python -c 'import torch; print("TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE")')"
+PYTAG="$(python -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
+echo "    torch ABI: cxx11abi${ABI} | python: ${PYTAG}"
+CAUSAL_WHL="https://github.com/Dao-AILab/causal-conv1d/releases/download/v${CAUSAL_VER}/causal_conv1d-${CAUSAL_VER}+${TORCH_TAG}cxx11abi${ABI}-${PYTAG}-${PYTAG}-linux_x86_64.whl"
+MAMBA_WHL="https://github.com/state-spaces/mamba/releases/download/v${MAMBA_VER}/mamba_ssm-${MAMBA_VER}+${TORCH_TAG}cxx11abi${ABI}-${PYTAG}-${PYTAG}-linux_x86_64.whl"
+
+echo "==> Installing prebuilt kernels"
 python -m pip uninstall -y causal_conv1d mamba_ssm || true
-export MAX_JOBS="${MAX_JOBS:-4}"
-export CUDA_HOME="${CUDA_HOME:-$(dirname "$(dirname "$(command -v nvcc)")")}"
-python -m pip install packaging ninja setuptools wheel
-python -m pip install --no-build-isolation --no-binary=causal_conv1d causal_conv1d
-python -m pip install --no-build-isolation --no-binary=mamba_ssm mamba_ssm
+python -m pip install "${CAUSAL_WHL}"
+python -m pip install "${MAMBA_WHL}"
 
 echo "==> Installing runtime library-path hook (torch + nvidia libs)"
-# Compiled extensions link libc10.so / libcudart.so.12; make torch's bundled libs
-# discoverable on every 'conda activate' (incl. inside SLURM job scripts).
+# Compiled extensions link libc10.so / libcudart.so.12; put torch's bundled libs
+# first so they're found on every 'conda activate' (incl. inside SLURM jobs).
 mkdir -p "${CONDA_PREFIX}/etc/conda/activate.d"
 cat > "${CONDA_PREFIX}/etc/conda/activate.d/torch_ld_library_path.sh" << 'EOF'
-_torch_libdirs="$(python -c '
-import os, glob, torch
-sp = os.path.dirname(os.path.dirname(torch.__file__))
-d = [os.path.join(os.path.dirname(torch.__file__), "lib")]
-d += sorted(glob.glob(os.path.join(sp, "nvidia", "*", "lib")))
-print(":".join(d))
-')"
-export LD_LIBRARY_PATH="${_torch_libdirs}:${LD_LIBRARY_PATH:-}"
-unset _torch_libdirs
+# Pure shell (does not import torch).
+_sp="$(ls -d "${CONDA_PREFIX}"/lib/python*/site-packages 2>/dev/null | head -1 || true)"
+_ld="${_sp}/torch/lib"
+for _d in "${_sp}"/nvidia/*/lib; do
+	[ -d "${_d}" ] && _ld="${_ld}:${_d}"
+done
+export LD_LIBRARY_PATH="${_ld}:${LD_LIBRARY_PATH:-}"
+unset _sp _ld _d
 EOF
-# (LD_LIBRARY_PATH was already prepended above for the build / verify.)
 
 echo "==> Verifying"
 python -c "import torch, mamba_ssm, causal_conv1d; from mamba_ssm import Mamba; \
@@ -97,7 +85,7 @@ print('OK | torch', torch.__version__, '| transformers', __import__('transformer
 
 echo
 echo "Done. Open a fresh shell (or 'conda deactivate && conda activate <env>') so the"
-echo "LD_LIBRARY_PATH hook is loaded automatically, then:"
+echo "LD_LIBRARY_PATH hook loads automatically, then:"
 echo "  pytest seq_models/caduceus/ -v"
 echo "  python -m seq_models.caduceus.fine_tune \\"
 echo "    --config scripts/training/training_configs/caduceus/dev.yaml \\"
