@@ -2,13 +2,17 @@
 
 TODO.md
 NOTES.md
+.claude/
 
 expanse_cmds.md
 tscc_cmds.md
 
 # STR data files
+**/basenji_splits/**/*.bed
 **/STR_data/**/*.bed
 **/STR_data/**/*.tsv
+**/STR_data/**/*.tab
+**/STR_data/**/*.txt
 !**/STR_data/**/str_len_2_dev.tsv
 
 # Invalid regions

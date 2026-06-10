@@ -68,6 +68,19 @@ if __name__ == "__main__":
 			print(f"      Pearson  r = {pear_r:+.3f}  (p = {pear_p:.2e})")
 			print(f"      Spearman r = {spear_r:+.3f}  (p = {spear_p:.2e})")
 
+	# Transformed targets as used for training: arcsin(sqrt(het)) vs
+	# log(mode copy number + 1). Spearman is unchanged by these monotonic
+	# transforms; Pearson can differ.
+	print("\nCorrelations between arcsin(sqrt(het)) and log(mode copy number + 1):")
+	for df, label in zip([df1, df2], ["Motif length 1", "Motif length 2"]):
+		het_t = np.arcsin(np.sqrt(df["heterozygosity"]))
+		log_mode = np.log1p(df["mode_copy_number"])
+		pear_r, pear_p = pearsonr(log_mode, het_t)
+		spear_r, spear_p = spearmanr(log_mode, het_t)
+		print(f"  {label} (n = {len(df):,}):")
+		print(f"    Pearson  r = {pear_r:+.3f}  (p = {pear_p:.2e})")
+		print(f"    Spearman r = {spear_r:+.3f}  (p = {spear_p:.2e})")
+
 	print("\nCorrelations between mode and reference copy number:")
 	for df, label in zip([df1, df2], ["Motif length 1", "Motif length 2"]):
 		pear_r, pear_p = pearsonr(df["mode_copy_number"], df["ref_copy_number"])
@@ -95,6 +108,30 @@ if __name__ == "__main__":
 	ax.set_xlabel("Heterozygosity (1 - Σp²)")
 	ax.set_ylabel("Proportion of loci")
 	ax.set_title("Heterozygosity by motif length")
+	plt.tight_layout()
+	plt.show()
+
+	# ------------------------------------------------------------------
+	# Heterozygosity distribution with arcsin(sqrt(x)) transform
+	# (matches the target transform used for model training)
+	# ------------------------------------------------------------------
+	print("\nPlotting arcsin(sqrt(heterozygosity))...")
+	fig, ax = plt.subplots(figsize=(8, 5))
+	combined["het_transformed"] = np.arcsin(np.sqrt(combined["heterozygosity"]))
+	sns.histplot(
+		data=combined,
+		x="het_transformed",
+		hue="motif_len",
+		stat="proportion",
+		common_norm=False,
+		element="step",
+		fill=False,
+		bins=60,
+		ax=ax,
+	)
+	ax.set_xlabel("arcsin(sqrt(heterozygosity))")
+	ax.set_ylabel("Proportion of loci")
+	ax.set_title("Transformed heterozygosity by motif length")
 	plt.tight_layout()
 	plt.show()
 
