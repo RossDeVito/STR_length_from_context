@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Download into the directory this script lives in, not the current working dir
+cd "$(dirname "$0")"
+
 # Define URLs (hg38)
 RMSK_URL="https://hgdownload.soe.ucsc.edu/goldenpath/hg38/database/rmsk.txt.gz"
 SEGDUPS_URL="https://hgdownload.soe.ucsc.edu/goldenpath/hg38/database/genomicSuperDups.txt.gz"
