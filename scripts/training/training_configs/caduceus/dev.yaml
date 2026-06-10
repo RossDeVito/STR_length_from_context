@@ -10,7 +10,7 @@ experiment_name: "caduceus_v0/dev"
 
 # --- Data ---
 batch_size: 16
-accumulate_grad_batches: 4
+accumulate_grad_batches: 1
 dataloader_num_workers: 4
 n_flanking_bp: 1000
 n_str_bp: 8
