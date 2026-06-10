@@ -328,6 +328,10 @@ class STRLengthModel(pl.LightningModule):
 			config=backbone_config,
 			trust_remote_code=True,
 		)
+		# from_pretrained returns the backbone in eval mode; we full fine-tune it,
+		# so default it to train mode (Lightning still switches the whole module to
+		# eval for validation/test).
+		self.caduceus.train()
 
 		if use_gradient_checkpointing:
 			try:
