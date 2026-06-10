@@ -1,24 +1,28 @@
 # GPU Python deps for the Caduceus-Ph stack. Installed by setup_gpu_env.sh.
 #
-# Uses PREBUILT mamba-ssm + causal-conv1d wheels (no compiling, no CUDA module).
-# torch 2.6 is used because BOTH mamba-ssm and causal-conv1d publish matched,
-# fused-capable cu12torch2.6 wheels in both C++ ABIs — so a wheel always matches
-# torch's ABI. (torch 2.5 had no abiFALSE causal wheel with the cpp_functions API,
-# which is what forced the painful source-build path; torch 2.6 avoids that.)
+# Uses the Caduceus authors' tested kernel triple (from their caduceus_env.yml):
+#   torch 2.2.0 + mamba-ssm 1.2.0.post1 + causal-conv1d 1.2.0.post2
+# Those mamba/causal wheels are built against torch 2.2.0 EXACTLY, so there is no
+# ABI/symbol drift (the recurring failure when matching newer-torch wheels).
+# Prebuilt: no CUDA module, no compiling. cu118 runs fine on the modern driver.
 #
-# The kernel wheels are installed by setup_gpu_env.sh (their URL depends on
-# torch's detected ABI), not listed here.
+# The mamba/causal kernel wheels themselves are installed by setup_gpu_env.sh
+# (cp311 / cu118 / torch2.2 / cxx11abiFALSE), not listed here.
 #
-# Assumes Python 3.11 and a driver supporting CUDA 12.4 (TSCC A100 / driver 580 does).
+# torch 2.2 predates numpy-2 / pandas-3, so those are capped; pip resolves the
+# rest of the science stack to numpy-1.26-compatible versions. Use a FRESH
+# python 3.11 env (this changes torch 2.x and CUDA 12->11).
 
-# --- PyTorch (CUDA 12.4 build) ---
---extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.6.0+cu124
+# --- PyTorch (CUDA 11.8 build) ---
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.2.0+cu118
 
-# --- transformers 4.x ---
-# The Caduceus trust_remote_code modeling/tokenizer targets ~4.38 and isn't
-# updated for transformers 5.x; 4.44.2 also supports numpy 2.x.
+# --- transformers 4.x (has the generation symbols mamba 1.2 imports) ---
 transformers==4.44.2
 
-# --- Everything else (numpy, pandas, lightning, captum, ...) ---
+# --- caps required by torch 2.2 ---
+numpy<2
+pandas<3
+
+# --- Everything else (lightning, captum, pyfaidx, tensorboard, ...) ---
 -r requirements.txt
