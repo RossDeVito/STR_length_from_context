@@ -19,7 +19,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Matched, fused-capable pair (both expose causal-conv1d's cpp_functions API).
 # TORCH_TAG must match the torch version pinned in requirements_gpu.txt.
-MAMBA_VER="2.3.2.post1"
+# mamba-ssm 2.2.6.post3 (NOT 2.3.x): 2.3.x pulls heavy deps (tilelang, quack,
+# triton>=3.5) that conflict with torch 2.6's triton 3.2 and wreck pip's resolver.
+# 2.2.6.post3 is lean, triton-3.2-compatible, and uses the same cpp_functions API.
+MAMBA_VER="2.2.6.post3"
 CAUSAL_VER="1.6.2.post1"
 TORCH_TAG="cu12torch2.6"
 
@@ -57,10 +60,12 @@ echo "    torch ABI: cxx11abi${ABI} | python: ${PYTAG}"
 CAUSAL_WHL="https://github.com/Dao-AILab/causal-conv1d/releases/download/v${CAUSAL_VER}/causal_conv1d-${CAUSAL_VER}+${TORCH_TAG}cxx11abi${ABI}-${PYTAG}-${PYTAG}-linux_x86_64.whl"
 MAMBA_WHL="https://github.com/state-spaces/mamba/releases/download/v${MAMBA_VER}/mamba_ssm-${MAMBA_VER}+${TORCH_TAG}cxx11abi${ABI}-${PYTAG}-${PYTAG}-linux_x86_64.whl"
 
-echo "==> Installing prebuilt kernels"
+echo "==> Installing prebuilt kernels (--no-deps so pip can't pull heavy/conflicting deps)"
 python -m pip uninstall -y causal_conv1d mamba_ssm || true
-python -m pip install "${CAUSAL_WHL}"
-python -m pip install "${MAMBA_WHL}"
+python -m pip install --no-deps "${CAUSAL_WHL}"
+python -m pip install --no-deps "${MAMBA_WHL}"
+# mamba's only extra runtime dep not already present (skipped by --no-deps):
+python -m pip install einops
 
 echo "==> Installing runtime library-path hook (torch + nvidia libs)"
 # Compiled extensions link libc10.so / libcudart.so.12; put torch's bundled libs
