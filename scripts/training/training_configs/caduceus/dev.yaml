@@ -14,7 +14,7 @@ accumulate_grad_batches: 2
 dataloader_num_workers: 4
 n_flanking_bp: 1000
 n_str_bp: 8
-dev_subset_n: 250          # cap every split for a fast dev cycle
+dev_subset_n: 1000          # cap every split for a fast dev cycle
 
 # Multi-objective targets (output_name -> data column). Defaults shown; drop one
 # to train a single objective.
