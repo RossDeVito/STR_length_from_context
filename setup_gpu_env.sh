@@ -47,7 +47,7 @@ echo "==> Installing prebuilt mamba/causal kernels (--no-deps)"
 python -m pip uninstall -y causal_conv1d mamba_ssm || true
 python -m pip install --no-deps "${CAUSAL_WHL}"
 python -m pip install --no-deps "${MAMBA_WHL}"
-python -m pip install einops   # mamba runtime dep (skipped by --no-deps)
+python -m pip install einops ninja   # mamba runtime deps (skipped by --no-deps)
 
 echo "==> Installing runtime library-path hook (torch + nvidia libs)"
 mkdir -p "${CONDA_PREFIX}/etc/conda/activate.d"
