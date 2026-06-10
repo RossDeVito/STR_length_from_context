@@ -45,6 +45,24 @@ echo "==> Installing torch + transformers + project deps"
 python -m pip install --upgrade pip
 python -m pip install -r "${REPO_ROOT}/requirements_gpu.txt"
 
+# Compute torch's bundled lib dirs (torch/lib + the pip nvidia/*/lib packages).
+_torch_libdirs() {
+	python -c '
+import os, glob, torch
+sp = os.path.dirname(os.path.dirname(torch.__file__))
+d = [os.path.join(os.path.dirname(torch.__file__), "lib")]
+d += sorted(glob.glob(os.path.join(sp, "nvidia", "*", "lib")))
+print(":".join(d))
+'
+}
+
+echo "==> Prepending torch's bundled CUDA libs to LD_LIBRARY_PATH"
+# A loaded CUDA toolkit module (for nvcc) puts the SYSTEM CUDA libs on
+# LD_LIBRARY_PATH, which can shadow torch's bundled cu121 libs and cause an
+# nvJitLink/cusparse "undefined symbol" at `import torch`. Putting torch's libs
+# FIRST makes torch use its own matching libs (nvcc still comes from the module).
+export LD_LIBRARY_PATH="$(_torch_libdirs):${LD_LIBRARY_PATH:-}"
+
 echo "==> Building causal-conv1d and mamba-ssm from source (ABI matches torch)"
 # Remove any prebuilt installs so pip actually rebuilds from the PyPI sdist.
 python -m pip uninstall -y causal_conv1d mamba_ssm || true
@@ -69,14 +87,7 @@ print(":".join(d))
 export LD_LIBRARY_PATH="${_torch_libdirs}:${LD_LIBRARY_PATH:-}"
 unset _torch_libdirs
 EOF
-# Apply to the current shell too, so the verify step below can load the kernels.
-export LD_LIBRARY_PATH="$(python -c '
-import os, glob, torch
-sp = os.path.dirname(os.path.dirname(torch.__file__))
-d = [os.path.join(os.path.dirname(torch.__file__), "lib")]
-d += sorted(glob.glob(os.path.join(sp, "nvidia", "*", "lib")))
-print(":".join(d))
-'):${LD_LIBRARY_PATH:-}"
+# (LD_LIBRARY_PATH was already prepended above for the build / verify.)
 
 echo "==> Verifying"
 python -c "import torch, mamba_ssm, causal_conv1d; from mamba_ssm import Mamba; \
