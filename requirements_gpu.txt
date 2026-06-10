@@ -1,0 +1,30 @@
+# GPU dependencies for the Caduceus-Ph stack (HPC with NVIDIA CUDA GPUs).
+#
+# Install into a FRESH Python 3.11 env (see commands below) with:
+#   pip install -r requirements_gpu.txt
+#
+# This pins a single, self-consistent, fully-prebuilt combo (no nvcc/compiling):
+#     Python 3.11 (cp311) | torch 2.5.1 + CUDA 12.1 | cu12 | cxx11abi=False
+# Verified to run on TSCC A100 nodes (driver 580.x supports up to CUDA 13.0, so
+# the cu121 build is within driver support).
+#
+# If you change Python or torch you MUST swap the two wheel URLs for the matching
+# assets (named ...cu12torch<X.Y>cxx11abi<FALSE|TRUE>-cp3<NN>...) from:
+#     https://github.com/state-spaces/mamba/releases
+#     https://github.com/Dao-AILab/causal-conv1d/releases
+# Match them to:
+#   python -c "import torch; print(torch.__version__, torch.version.cuda, torch._C._GLIBCXX_USE_CXX11_ABI)"
+#
+# Install on a GPU node: importing mamba_ssm loads the CUDA kernels.
+
+# --- PyTorch (CUDA 12.1 build) ---
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+
+# --- Prebuilt Mamba CUDA kernels (match the torch pin above) ---
+https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.0.post8/causal_conv1d-1.5.0.post8+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+https://github.com/state-spaces/mamba/releases/download/v2.2.6.post3/mamba_ssm-2.2.6.post3+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+
+# --- Everything else (numpy, pandas, transformers, lightning, captum, ...) ---
+# Reuses the shared list; its bare `torch` is satisfied by the pin above.
+-r requirements.txt
