@@ -1,41 +1,23 @@
-# GPU dependencies for the Caduceus-Ph stack (HPC with NVIDIA CUDA GPUs).
+# GPU Python deps for the Caduceus-Ph stack. Installed by setup_gpu_env.sh.
 #
-# Install into a FRESH Python 3.11 env (see commands below) with:
-#   pip install -r requirements_gpu.txt
+# The mamba-ssm / causal-conv1d CUDA kernels are NOT listed here: setup_gpu_env.sh
+# BUILDS them from source against the torch below. Building locally makes the
+# kernels' C++ ABI match your torch automatically (the prebuilt wheels do not
+# offer a matching abiFALSE + torch-2.5 + cpp_functions combo) and enables
+# Mamba's fused fast path.
 #
-# This pins a single, self-consistent, fully-prebuilt combo (no nvcc/compiling):
-#     Python 3.11 (cp311) | torch 2.5.1 + CUDA 12.1 | cu12 | cxx11abi=False
-# Verified to run on TSCC A100 nodes (driver 580.x supports up to CUDA 13.0, so
-# the cu121 build is within driver support).
-#
-# If you change Python or torch you MUST swap the two wheel URLs for the matching
-# assets (named ...cu12torch<X.Y>cxx11abi<FALSE|TRUE>-cp3<NN>...) from:
-#     https://github.com/state-spaces/mamba/releases
-#     https://github.com/Dao-AILab/causal-conv1d/releases
-# Match them to:
-#   python -c "import torch; print(torch.__version__, torch.version.cuda, torch._C._GLIBCXX_USE_CXX11_ABI)"
-#
-# Install on a GPU node: importing mamba_ssm loads the CUDA kernels.
+# Assumes Python 3.11 and a CUDA 12.x toolkit (nvcc) available for the source
+# build. Install order matters (torch first, then the kernels) — that's why the
+# kernels live in the script, not in this file.
 
-# --- PyTorch (CUDA 12.1 build) ---
+# --- PyTorch (CUDA 12.1 build; runs on TSCC A100, driver 580 supports up to CUDA 13) ---
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch==2.5.1+cu121
 
-# --- Prebuilt Mamba CUDA kernels (match the torch pin above) ---
-https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.0.post8/causal_conv1d-1.5.0.post8+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
-https://github.com/state-spaces/mamba/releases/download/v2.2.6.post3/mamba_ssm-2.2.6.post3+cu12torch2.5cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
-
-# Pin transformers to 4.x. Two reasons:
-#   1) mamba_ssm 2.2.x imports GreedySearchDecoderOnlyOutput / SampleDecoderOnlyOutput
-#      from transformers.generation, which were removed in transformers 5.x.
-#      (importing any mamba_ssm submodule runs its __init__, so the Caduceus
-#      backbone needs this too).
-#   2) the Caduceus trust_remote_code modeling/tokenizer targets transformers
-#      ~4.38 and isn't updated for the 5.x major release.
-# 4.44.2 still has those symbols and supports numpy 2.x (added in 4.43).
+# --- transformers 4.x ---
+# The Caduceus trust_remote_code modeling/tokenizer targets ~4.38 and isn't
+# updated for the transformers 5.x major release; 4.44.2 also supports numpy 2.x.
 transformers==4.44.2
 
 # --- Everything else (numpy, pandas, lightning, captum, ...) ---
-# Reuses the shared list; its bare `torch`/`transformers` are satisfied by the
-# pins above.
 -r requirements.txt
