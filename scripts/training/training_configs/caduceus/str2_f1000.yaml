@@ -35,11 +35,11 @@ weight_decay: 0.01
 
 # --- Scheduler ---
 scheduler_name: "ReduceLROnPlateau"
-scheduler_patience: 3
+scheduler_patience: 5
 scheduler_factor: 0.5
 
 # --- Trainer ---
-max_epochs: 5
-patience_early_stopping: 5
+max_epochs: 500
+patience_early_stopping: 20
 gradient_clip_val: 1.0
 precision: "bf16-mixed"
