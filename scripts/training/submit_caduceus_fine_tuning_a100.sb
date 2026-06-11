@@ -1,0 +1,34 @@
+#!/bin/bash
+#SBATCH --job-name=caduceus_ft_a100
+#SBATCH --partition=hotel-gpu
+#SBATCH --qos=hotel-gpu
+#SBATCH --account=htl149
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:a100:1
+#SBATCH --mem=50G
+#SBATCH --time=48:00:00
+#SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/caduceus_ft_%j.out
+#SBATCH --error=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/caduceus_ft_%j.err
+
+CONFIG_NAME=$1
+
+if [ -z "$CONFIG_NAME" ]; then
+    echo "Error: No config name provided."
+    echo "Usage: sbatch submit_caduceus_fine_tuning_a100.sb config_filename.yaml"
+    exit 1
+fi
+
+echo "Job $SLURM_JOB_ID started on $(hostname) at $(date)"
+echo "Config: $CONFIG_NAME"
+
+PROJECT_ROOT="/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context/"
+cd "$PROJECT_ROOT" || exit 1
+
+source ~/.bashrc
+conda activate str_pred_caduceus
+
+./scripts/training/run_caduceus_fine_tuning.sh "$CONFIG_NAME"
+
+echo "Job finished at $(date)"

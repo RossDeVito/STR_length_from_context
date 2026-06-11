@@ -1,0 +1,37 @@
+#!/bin/bash
+#SBATCH --job-name=caduceus_ft_resume_a100
+#SBATCH --partition=hotel-gpu
+#SBATCH --qos=hotel-gpu
+#SBATCH --account=htl149
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:a100:1
+#SBATCH --mem=50G
+#SBATCH --time=48:00:00
+#SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/caduceus_ft_%j.out
+#SBATCH --error=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/caduceus_ft_%j.err
+
+RESUME_DIR=$1
+
+if [ -z "$RESUME_DIR" ]; then
+    echo "Error: No resume directory provided."
+    echo "Usage: sbatch submit_resume_caduceus_fine_tuning_a100.sb resume_directory"
+    exit 1
+fi
+
+OUTPUT_DIR=${RESUME_DIR%/*}  # Parent directory of resume directory
+
+echo "Output directory set to: $OUTPUT_DIR"
+echo "Job $SLURM_JOB_ID started on $(hostname) at $(date)"
+echo "Resuming training from directory: $RESUME_DIR"
+
+PROJECT_ROOT="/tscc/projects/ps-gymreklab/rdevito/str_len_pred/STR_length_from_context/"
+cd "$PROJECT_ROOT" || exit 1
+
+source ~/.bashrc
+conda activate str_pred_caduceus
+
+./scripts/training/resume_caduceus_fine_tuning.sh "$RESUME_DIR" "$OUTPUT_DIR"
+
+echo "Job finished at $(date)"
