@@ -16,6 +16,10 @@ targets:
   length: mode_copy_number
   variation: heterozygosity
 
+# How to combine the per-task losses into the training objective:
+# "uncertainty" (learned weighting), "fixed_inverse_variance" or "sum".
+loss_weighting: uncertainty
+
 # --- Model ---
 n_prefix_prompt_tokens: 16
 n_str_prompt_tokens: 16

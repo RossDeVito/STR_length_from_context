@@ -83,18 +83,20 @@ if __name__ == "__main__":
 	datamodule = create_data_module(config)
 	datamodule.setup()
 
-	# Precompute and freeze the fixed-loss monitor normalizers (per-task variance
-	# of the transformed target on the val split), unless already in config. This
-	# keeps checkpoint selection comparable across steps and reproducible on resume.
+	# Precompute and freeze the fixed-loss normalizers (per-task variance of the
+	# transformed target on the TRAIN split), unless already in config. These
+	# normalize both the fixed-weight val monitor and (when loss_weighting is
+	# "fixed_inverse_variance") the training objective, so they must be computed
+	# on the train split. Freezing keeps selection comparable/reproducible.
 	if "monitor_norm" not in config or config["monitor_norm"] is None:
 		targets = config.get("targets", DEFAULT_TARGETS)
 		transforms = resolve_transforms(
 			list(targets.keys()), config.get("target_transforms")
 		)
 		config["monitor_norm"] = compute_monitor_norms(
-			datamodule.val_dataset.str_df, targets, transforms
+			datamodule.train_dataset.str_df, targets, transforms
 		)
-		print(f"Computed monitor_norm from val split: {config['monitor_norm']}")
+		print(f"Computed monitor_norm from train split: {config['monitor_norm']}")
 
 	# Save the (now monitor_norm-augmented) config used.
 	config_save_path = os.path.join(experiment_path, "config.yaml")

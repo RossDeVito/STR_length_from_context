@@ -120,11 +120,12 @@ def compute_monitor_norms(df, targets, transforms):
 	"""Per-task variance of the transformed target column.
 
 	Computed in the SAME (training) space the loss uses, so it can normalize the
-	fixed-weight validation monitor. Intended to be computed once on the val set
-	and frozen (stored in config), not recomputed per epoch.
+	fixed-weight validation monitor and the fixed_inverse_variance training loss.
+	Intended to be computed once on the TRAIN split and frozen (stored in config),
+	not recomputed per epoch.
 
 	Args:
-		df (pd.DataFrame): rows to compute over (typically the val split).
+		df (pd.DataFrame): rows to compute over (the train split).
 		targets (dict): output_name -> source column.
 		transforms (dict): output_name -> transform name.
 
@@ -233,6 +234,40 @@ def uncertainty_weighted_loss(raw_losses, log_vars):
 	return total, components
 
 
+def fixed_inverse_variance_loss(raw_losses, norms):
+	""" Fixed inverse-variance weighting of per-task losses.
+
+	Each task loss is divided by its frozen per-task variance (i.e. weighted by
+	1 / sigma_i^2), then summed. This is exactly the quantity logged as
+	`{stage}_fixed_loss` for checkpoint selection, used here as the training
+	objective instead of the learned uncertainty weighting. The weights are
+	fixed (not learned), so there is no log-variance regularizer term.
+
+	Args:
+		raw_losses (dict): task -> scalar loss tensor (native training-space).
+		norms (dict | None): task -> per-task variance (frozen). If None, each
+			weight is 1 (plain sum).
+
+	Returns:
+		(total_loss, components): components[task] = dict with 's' (None),
+			'weight' (1 / variance), 'weighted' (weight * L) and 'raw' (L).
+	"""
+	total = 0.0
+	components = {}
+	for name, raw in raw_losses.items():
+		norm = 1.0 if norms is None else max(float(norms[name]), 1e-8)
+		weight = 1.0 / norm
+		weighted = weight * raw
+		total = total + weighted
+		components[name] = {
+			"s": None,
+			"weight": weight,
+			"weighted": weighted,
+			"raw": raw,
+		}
+	return total, components
+
+
 # --- LightningModule ----------------------------------------------------------
 
 def create_model(config):
@@ -243,6 +278,11 @@ def create_model(config):
 	Key config keys:
 		targets (dict): output_name -> source column. Default DEFAULT_TARGETS.
 		target_transforms (dict): output_name -> transform override.
+		loss_weighting (str): how to combine per-task losses into the training
+			objective. "uncertainty" (learned homoscedastic weighting),
+			"fixed_inverse_variance" (fixed 1/variance weighting, matching the
+			val monitor) or "sum". Default: "uncertainty" for multi-task, "sum"
+			for single-task.
 		n_prefix_prompt_tokens / n_str_prompt_tokens / n_suffix_prompt_tokens (int).
 		head_hidden_layers (list[int]), head_dropout (float).
 		use_attention_pooling (bool, default True), attention_pooling_num_heads (int).
@@ -254,6 +294,7 @@ def create_model(config):
 	return STRLengthModel(
 		targets=config.get("targets", DEFAULT_TARGETS),
 		target_transforms=config.get("target_transforms", None),
+		loss_weighting=config.get("loss_weighting", None),
 
 		n_prefix_prompt_tokens=config.get("n_prefix_prompt_tokens", 0),
 		n_str_prompt_tokens=config.get("n_str_prompt_tokens", 0),
@@ -286,6 +327,7 @@ class STRLengthModel(pl.LightningModule):
 		self,
 		targets: dict,
 		target_transforms=None,
+		loss_weighting=None,
 
 		n_prefix_prompt_tokens: int = 0,
 		n_str_prompt_tokens: int = 0,
@@ -315,7 +357,18 @@ class STRLengthModel(pl.LightningModule):
 		self.targets = dict(targets)
 		self.task_names = list(self.targets.keys())
 		self.transforms = resolve_transforms(self.task_names, target_transforms)
-		self.use_uncertainty = len(self.task_names) >= 2
+
+		# How to combine per-task losses into the training objective. Default:
+		# uncertainty weighting for multi-task, plain sum for single-task.
+		if loss_weighting is None:
+			loss_weighting = "uncertainty" if len(self.task_names) >= 2 else "sum"
+		valid = {"uncertainty", "fixed_inverse_variance", "sum"}
+		if loss_weighting not in valid:
+			raise ValueError(
+				f"Unknown loss_weighting {loss_weighting!r}; expected one of {valid}."
+			)
+		self.loss_weighting = loss_weighting
+		self.use_uncertainty = loss_weighting == "uncertainty"
 		self.monitor_norm = monitor_norm
 
 		# Load Caduceus backbone (base model -> last_hidden_state).
@@ -436,11 +489,15 @@ class STRLengthModel(pl.LightningModule):
 				target_raw,
 			)
 
-		if self.use_uncertainty:
+		if self.loss_weighting == "uncertainty":
 			total, components = uncertainty_weighted_loss(
 				raw_losses, {n: self.log_vars[n] for n in self.task_names}
 			)
-		else:
+		elif self.loss_weighting == "fixed_inverse_variance":
+			total, components = fixed_inverse_variance_loss(
+				raw_losses, self.monitor_norm
+			)
+		else:  # "sum"
 			total = sum(raw_losses.values())
 			components = {
 				n: {"s": None, "weight": None, "weighted": raw_losses[n],
@@ -534,15 +591,15 @@ class STRLengthModel(pl.LightningModule):
 		return out
 
 	def on_fit_start(self):
-		# If monitor_norm wasn't provided, compute it ONCE from the val split and
-		# freeze it. Warn so it can be copied into config for reproducibility.
+		# If monitor_norm wasn't provided, compute it ONCE from the train split
+		# and freeze it. Warn so it can be copied into config for reproducibility.
 		if self.monitor_norm is None:
-			val_df = self.trainer.datamodule.val_dataset.str_df
+			train_df = self.trainer.datamodule.train_dataset.str_df
 			self.monitor_norm = compute_monitor_norms(
-				val_df, self.targets, self.transforms
+				train_df, self.targets, self.transforms
 			)
 			warnings.warn(
-				"monitor_norm not provided; computed once from the val split: "
+				"monitor_norm not provided; computed once from the train split: "
 				f"{self.monitor_norm}. Store this in config for reproducible "
 				"checkpoint selection."
 			)
