@@ -3,6 +3,12 @@
 Baseline models:
 	- Mean
 	- Mean by STR motif
+
+Targets and data follow the Caduceus standard (see seq_models/caduceus): the
+multi-objective targets are `length` (mode_copy_number) and `variation`
+(heterozygosity). Each locus appears twice in the data (forward and reverse
+complement); Caduceus predict.py evaluates per-locus (one row per ID after
+RC-averaging), so we dedup to one row per locus here too.
 """
 
 import os
@@ -18,27 +24,36 @@ from pyfaidx import Fasta
 from eval_multiple_preds import get_metrics
 
 
-STR_CANONICALIZATION = {
-	"A": "A",
-	"C": "C",
-	"G": "G",
-	"T": "T",
-	"AC": "AC",
-	"CA": "AC",
-	"AG": "AG",
-	"GA": "AG",
-	"AT": "AT",
-	"TA": "AT",
-	"CG": "CG",
-	"GC": "CG",
-	"CT": "CT",
-	"TC": "CT",
-	"GT": "GT",
-	"TG": "GT",
+# Regression targets, mirroring DEFAULT_TARGETS in seq_models/caduceus/model.py
+# (hardcoded here to avoid importing the heavy caduceus/torch stack).
+TARGETS = {
+	"length": "mode_copy_number",
+	"variation": "heterozygosity",
 }
 
-REF_GENOME_FILE = "../../data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
+REF_GENOME_FILE = "../../data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
 
+_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
+
+
+def reverse_complement(seq):
+	"""Return the reverse complement of an (uppercase) DNA string."""
+	return seq.translate(_COMPLEMENT)[::-1]
+
+
+def canonicalize_motif(seq):
+	"""Canonicalize an STR motif so it is invariant to rotation and strand.
+
+	Returns the lexicographically smallest string over all rotations of the
+	motif and all rotations of its reverse complement. Strand is not meaningful
+	(the Caduceus pipeline trains with rev_comp augmentation), so e.g. AC, CA,
+	GT and TG all collapse to "AC", and A/T -> "A", C/G -> "C".
+	"""
+	candidates = []
+	for s in (seq, reverse_complement(seq)):
+		for i in range(len(s)):
+			candidates.append(s[i:] + s[:i])
+	return min(candidates)
 
 
 def load_and_add_motif(data_file, str_len):
@@ -48,6 +63,9 @@ def load_and_add_motif(data_file, str_len):
 		sep="\t"
 	)
 
+	# One row per locus (the two rev_comp orientations share motif + targets).
+	data_df = data_df.drop_duplicates("ID").reset_index(drop=True)
+
 	ref_genome = Fasta(REF_GENOME_FILE, sequence_always_upper=True)
 
 	for idx, row in data_df.iterrows():
@@ -56,15 +74,7 @@ def load_and_add_motif(data_file, str_len):
 		end = row["str_end"]
 
 		str_seq = ref_genome[chrom][start:end]
-		try:
-			motif = STR_CANONICALIZATION[str_seq[:str_len].seq]
-		except KeyError:
-			print(f"Warning: Unrecognized STR motif {str_seq[:str_len].seq} at {chrom}:{start}-{end}.")
-			print(f"STR sequence: {str_seq}")
-			print(f"Index: {idx}")
-			raise KeyError(f"Unrecognized STR motif {str_seq[:str_len].seq} at {chrom}:{start}-{end}.")
-
-		data_df.at[idx, "motif"] = motif
+		data_df.at[idx, "motif"] = canonicalize_motif(str_seq[:str_len].seq)
 
 	return data_df
 
@@ -72,77 +82,53 @@ def load_and_add_motif(data_file, str_len):
 if __name__ == '__main__':
 
 	# Options
-	data_dir = "../../data/STR_data/filtered_labeled_strs"
-	data_fname = "str_len_{}_max_cn_perc_0.975_n_flanking_10000_filtered.tsv"
+	data_dir = "../../data/STR_data/HipSTR_labeled_STRs"
+	data_fname = "str_len_{}_n_flanking_10000.tsv"
 
-	# Load data and add motif column
-	str1_data = load_and_add_motif(
-		os.path.join(data_dir, data_fname.format(1)),
-		str_len=1
-	)
-	str2_data = load_and_add_motif(
-		os.path.join(data_dir, data_fname.format(2)),
-		str_len=2
-	)
-
-	# Get overall means from training set
-	str1_data['mean_copy_number'] = str1_data[
-		str1_data['split'] == 'train'
-	]['copy_number'].mean()
-
-	str2_data['mean_copy_number'] = str2_data[
-		str2_data['split'] == 'train'
-	]['copy_number'].mean()
-
-	# Get motif-specific means from training set
-	str1_motif_means = str1_data[
-		str1_data['split'] == 'train'
-	].groupby('motif')['copy_number'].mean().to_dict()
-	str2_motif_means = str2_data[
-		str2_data['split'] == 'train'
-	].groupby('motif')['copy_number'].mean().to_dict()
-
-	str1_data['motif_mean_copy_number'] = str1_data['motif'].map(
-		str1_motif_means
-	)
-	str2_data['motif_mean_copy_number'] = str2_data['motif'].map(
-		str2_motif_means
-	)
-
-	# Compute metrics
-	baseline_perf = {
-		1: dict(),
-		2: dict()
+	# Load data (one row per locus) and add canonical motif column
+	str_data = {
+		str_len: load_and_add_motif(
+			os.path.join(data_dir, data_fname.format(str_len)),
+			str_len=str_len
+		)
+		for str_len in [1, 2]
 	}
 
-	str1_test = str1_data[str1_data['split'] == 'test']
-	str2_test = str2_data[str2_data['split'] == 'test']
+	# Compute baselines per STR length and per target.
+	baseline_perf = {1: dict(), 2: dict()}
 
-	baseline_perf[1]['overall_mean'] = get_metrics(
-		pred=str1_test['mean_copy_number'],
-		true=str1_test['copy_number']
-	)
-	baseline_perf[2]['overall_mean'] = get_metrics(
-		pred=str2_test['mean_copy_number'],
-		true=str2_test['copy_number']
-	)
+	for str_len, data_df in str_data.items():
+		train_df = data_df[data_df['split'] == 'train']
+		test_df = data_df[data_df['split'] == 'test']
 
-	baseline_perf[1]['motif_mean'] = get_metrics(
-		pred=str1_test['motif_mean_copy_number'],
-		true=str1_test['copy_number']
-	)
-	baseline_perf[2]['motif_mean'] = get_metrics(
-		pred=str2_test['motif_mean_copy_number'],
-		true=str2_test['copy_number']
-	)
+		for out_name, col in TARGETS.items():
+			# Overall mean and per-motif means from the training set.
+			overall_mean = train_df[col].mean()
+			motif_means = train_df.groupby('motif')[col].mean().to_dict()
+
+			overall_pred = np.full(len(test_df), overall_mean)
+			motif_pred = test_df['motif'].map(motif_means)
+
+			baseline_perf[str_len][out_name] = {
+				'overall_mean': get_metrics(
+					pred=overall_pred,
+					true=test_df[col]
+				),
+				'motif_mean': get_metrics(
+					pred=motif_pred,
+					true=test_df[col]
+				),
+			}
 
 	print("Baseline Performance:")
 	for str_len in [1, 2]:
 		print(f"STR Length {str_len}:")
-		for baseline_type in ['overall_mean', 'motif_mean']:
-			print(f"  {baseline_type}:")
-			for metric_name, metric_value in baseline_perf[str_len][baseline_type].items():
-				print(f"    {metric_name}: {metric_value:.4f}")
+		for out_name in TARGETS:
+			print(f"  {out_name}:")
+			for baseline_type in ['overall_mean', 'motif_mean']:
+				print(f"    {baseline_type}:")
+				for metric_name, metric_value in baseline_perf[str_len][out_name][baseline_type].items():
+					print(f"      {metric_name}: {metric_value:.4f}")
 
 	# Save baseline performance to pretty JSON
 	os.makedirs("predictions/baseline", exist_ok=True)

@@ -1,28 +1,38 @@
-""" Train and evaluate a linear baseline model for STR length prediction.
+""" Train and evaluate a linear baseline model for STR length/variation.
 
 Fits a ridge regression on k-mer count features extracted from flanking
-sequences, selects the regularization strength (alpha) using the
-validation split, and saves test-set predictions in the same TSV format
-as the HyenaDNA predict script.
+sequences (optionally stratified by flank side and/or distance from the STR),
+selects the regularization strength (alpha) per target using the validation
+split, and saves test-set predictions in the same per-locus format as the
+Caduceus predict script.
+
+The targets follow the Caduceus standard (multi-objective): `length`
+(mode_copy_number, trained in log1p space) and `variation` (heterozygosity,
+trained in arcsin-sqrt space). Each locus appears in both orientations
+(augmentation); native-space test predictions are averaged per locus (RC
+conjoining), matching seq_models/caduceus/predict.py.
 
 Args:
 	--config: Path to YAML config file.
 	--output_dir: Parent directory for outputs.
 
 Required config keys:
-	data_path (str): Path to filtered STR TSV file.
+	data_path (str): Path to STR TSV file (Caduceus standard).
 	ref_path (str): Path to reference genome FASTA (.fa with .fai).
 	experiment_name (str): Output subdirectory relative to output_dir
-		(e.g. "str2/v1/str2_ridge_f2000").
+		(e.g. "lin/str2/str2_f5000_sep_dist").
 	n_flanking_bp (int): Number of flanking base pairs per side.
 
 Optional config keys:
 	k_values (list[int]): K-mer sizes to count. Default: [3, 4, 5].
-	log_transform (bool): If true, train in log1p(copy_number) space.
-		Predictions are always converted back to copy-number space
-		for the output TSV. Default: true.
-	alphas (list[float]): Ridge alpha values to search over on the
-		validation set. Default: [1e-4, 1e-2, 1, 1e2, 1e4].
+	flank_mode (str): "separate" (left/right distinct) or "pooled" (summed).
+		Default: "separate".
+	distance_bins (list[int]): Upper edges (bp from STR) for distance
+		stratification. Default: None (single whole-flank bin).
+	targets (dict): output_name -> source column. Default: both length and
+		variation. Provide a subset for single-objective runs.
+	alphas (list[float]): Ridge alpha values to search over on the validation
+		set. Default: [1e-4, 1e-2, 1, 1e2, 1e4].
 	seed (int): Random seed for reproducibility. Default: 42.
 """
 
@@ -31,6 +41,7 @@ import json
 import os
 
 import numpy as np
+import pandas as pd
 import yaml
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
@@ -39,9 +50,34 @@ from tqdm import tqdm
 from seq_models.linear.data import create_kmer_data
 
 
+# Targets and training-space transforms, mirroring DEFAULT_TARGETS /
+# DEFAULT_TARGET_TRANSFORMS in seq_models/caduceus/model.py (NumPy versions here
+# to avoid importing the heavy caduceus/torch stack).
+DEFAULT_TARGETS = {
+	"length": "mode_copy_number",
+	"variation": "heterozygosity",
+}
+DEFAULT_TARGET_TRANSFORMS = {
+	"length": "log1p",
+	"variation": "arcsin_sqrt",
+}
+
+_HALF_PI = np.pi / 2.0
+
+# name -> (forward transform, inverse transform), both operating on np arrays.
+TARGET_TRANSFORMS = {
+	"none": (lambda y: y, lambda p: p),
+	"log1p": (np.log1p, np.expm1),
+	"arcsin_sqrt": (
+		lambda y: np.arcsin(np.sqrt(np.clip(y, 0.0, 1.0))),
+		lambda p: np.sin(np.clip(p, 0.0, _HALF_PI)) ** 2,
+	),
+}
+
+
 def get_args():
 	parser = argparse.ArgumentParser(
-		description="Train and evaluate linear baseline for STR length."
+		description="Train and evaluate linear baseline for STR length/variation."
 	)
 	parser.add_argument(
 		"--config",
@@ -58,6 +94,53 @@ def get_args():
 	return parser.parse_args()
 
 
+def fit_target(X_train, X_val, X_test, y_raw, transform_name, alphas, seed):
+	"""Train ridge for one target: alpha search on val, refit, predict test.
+
+	Args:
+		X_train/X_val/X_test: scaled feature matrices.
+		y_raw: dict with 'train'/'val' raw (native) target arrays.
+		transform_name: training-space transform name.
+		alphas: list of ridge alphas to search.
+		seed: random seed.
+
+	Returns:
+		(test_pred_native, info) where test_pred_native is the native-space
+		prediction array and info is a dict of alpha-search results.
+	"""
+	fwd, inv = TARGET_TRANSFORMS[transform_name]
+	y_train = fwd(np.asarray(y_raw["train"], dtype=np.float64))
+	y_val = fwd(np.asarray(y_raw["val"], dtype=np.float64))
+
+	best_alpha = None
+	best_val_mse = np.inf
+	val_results = []
+	for alpha in tqdm(alphas, desc=f"Alpha search ({transform_name})"):
+		model = Ridge(alpha=alpha, random_state=seed)
+		model.fit(X_train, y_train)
+		val_preds = model.predict(X_val)
+		val_mse = float(np.mean((val_preds - y_val) ** 2))
+		val_results.append({"alpha": alpha, "val_mse": val_mse})
+		tqdm.write(f"  alpha={alpha:<10g}  val_mse={val_mse:.6f}")
+		if val_mse < best_val_mse:
+			best_val_mse = val_mse
+			best_alpha = alpha
+
+	tqdm.write(f"  best alpha={best_alpha}  (val MSE={best_val_mse:.6f})")
+
+	model = Ridge(alpha=best_alpha, random_state=seed)
+	model.fit(X_train, y_train)
+	test_pred_native = inv(model.predict(X_test))
+
+	info = {
+		"transform": transform_name,
+		"best_alpha": best_alpha,
+		"best_val_mse": best_val_mse,
+		"alpha_search": val_results,
+	}
+	return test_pred_native, info
+
+
 if __name__ == "__main__":
 
 	args = get_args()
@@ -72,11 +155,18 @@ if __name__ == "__main__":
 
 	n_flanking_bp = config["n_flanking_bp"]
 	k_values = config.get("k_values", [3, 4, 5])
-	log_transform = config.get("log_transform", True)
+	flank_mode = config.get("flank_mode", "separate")
+	distance_bins = config.get("distance_bins", None)
+	targets = config.get("targets", DEFAULT_TARGETS)
 	alphas = [
 		float(a) for a in config.get("alphas", [1e-4, 1e-2, 1.0, 1e2, 1e4])
 	]
 	seed = config.get("seed", 42)
+
+	# Resolve a transform per target (defaults; "none" if unknown target).
+	transforms = {
+		name: DEFAULT_TARGET_TRANSFORMS.get(name, "none") for name in targets
+	}
 
 	# ------------------------------------------------------------------
 	# Set up output directory
@@ -86,7 +176,6 @@ if __name__ == "__main__":
 	experiment_path = os.path.join(args.output_dir, experiment_name)
 	os.makedirs(experiment_path, exist_ok=True)
 
-	# Save config copy
 	with open(os.path.join(experiment_path, "config.yaml"), "w") as f:
 		yaml.dump(config, f)
 
@@ -99,24 +188,13 @@ if __name__ == "__main__":
 		ref_path=config["ref_path"],
 		n_flanking_bp=n_flanking_bp,
 		k_values=k_values,
+		flank_mode=flank_mode,
+		distance_bins=distance_bins,
 	)
 
 	X_train = splits["train"]["X"]
 	X_val = splits["val"]["X"]
 	X_test = splits["test"]["X"]
-
-	if log_transform:
-		# create_kmer_data already returns log1p(copy_number) as y
-		y_train = splits["train"]["y"]
-		y_val = splits["val"]["y"]
-		y_test = splits["test"]["y"]
-		print("Training in log1p(copy_number) space.")
-	else:
-		# Use raw copy number
-		y_train = splits["train"]["metadata"]["copy_number"].values
-		y_val = splits["val"]["metadata"]["copy_number"].values
-		y_test = splits["test"]["metadata"]["copy_number"].values
-		print("Training in raw copy-number space.")
 
 	print(f"Train: {X_train.shape[0]} samples, "
 		  f"Val: {X_val.shape[0]} samples, "
@@ -133,87 +211,89 @@ if __name__ == "__main__":
 	X_test = scaler.transform(X_test)
 
 	# ------------------------------------------------------------------
-	# Alpha selection on validation set
+	# Fit one ridge per target and collect native-space test predictions
 	# ------------------------------------------------------------------
 
-	print(f"\nSearching over {len(alphas)} alpha values...")
+	train_meta = splits["train"]["metadata"]
+	val_meta = splits["val"]["metadata"]
+	test_meta = splits["test"]["metadata"]
 
-	best_alpha = None
-	best_val_mse = np.inf
-	val_results = []
-
-	for alpha in tqdm(alphas, desc="Alpha search"):
-		model = Ridge(alpha=alpha, random_state=seed)
-
-		tqdm.write(f"  alpha={alpha:<10g}  fitting on {X_train.shape[0]} samples...")
-		model.fit(X_train, y_train)
-
-		val_preds = model.predict(X_val)
-		val_mse = np.mean((val_preds - y_val) ** 2)
-
-		val_results.append({"alpha": alpha, "val_mse": float(val_mse)})
-		tqdm.write(f"  alpha={alpha:<10g}  val_mse={val_mse:.6f}")
-
-		if val_mse < best_val_mse:
-			best_val_mse = val_mse
-			best_alpha = alpha
-
-	print(f"\nBest alpha: {best_alpha}  (val MSE: {best_val_mse:.6f})")
-
-	# ------------------------------------------------------------------
-	# Refit with best alpha and predict on test
-	# ------------------------------------------------------------------
-
-	print(f"\nRefitting with best alpha={best_alpha} on training set...")
-	model = Ridge(alpha=best_alpha, random_state=seed)
-	model.fit(X_train, y_train)
-
-	print(f"Predicting on {X_test.shape[0]} test samples...")
-	test_preds = model.predict(X_test)
+	target_info = {}
+	test_preds = {}  # out_name -> native-space prediction array
+	for out_name, col in targets.items():
+		print(f"\n=== Target '{out_name}' (column '{col}', "
+			  f"transform '{transforms[out_name]}') ===")
+		pred_native, info = fit_target(
+			X_train, X_val, X_test,
+			y_raw={
+				"train": train_meta[col].values,
+				"val": val_meta[col].values,
+			},
+			transform_name=transforms[out_name],
+			alphas=alphas,
+			seed=seed,
+		)
+		test_preds[out_name] = pred_native
+		info["source_column"] = col
+		target_info[out_name] = info
 
 	# ------------------------------------------------------------------
-	# Convert predictions to copy-number space for output
+	# Assemble per-orientation table, then RC-average per locus
+	# (parallel to seq_models/caduceus/predict.py aggregate_predictions)
 	# ------------------------------------------------------------------
 
-	if log_transform:
-		# Model predicted in log1p space -> expm1 to get copy number
-		test_pred_cn = np.expm1(test_preds)
-	else:
-		test_pred_cn = test_preds
+	per_orientation = pd.DataFrame({
+		"id": test_meta["ID"].astype(str).values,
+		"rev_comp": test_meta["rev_comp"].astype(bool).values,
+	})
+	for out_name, col in targets.items():
+		per_orientation[f"pred_{out_name}"] = test_preds[out_name]
+		per_orientation[f"true_{out_name}"] = test_meta[col].values
 
-	true_cn = splits["test"]["metadata"]["copy_number"].values
+	agg = {f"pred_{t}": "mean" for t in targets}
+	agg.update({f"true_{t}": "first" for t in targets})
+	per_locus = per_orientation.groupby("id", as_index=False).agg(agg)
+
+	# Merge locus metadata (one row per ID) into the per-locus table.
+	meta_cols = [
+		c for c in ["chrom", "str_start", "str_end", "motif", "split"]
+		if c in test_meta.columns
+	]
+	if meta_cols:
+		meta = (
+			test_meta[["ID"] + meta_cols]
+			.drop_duplicates("ID")
+			.rename(columns={"ID": "id"})
+		)
+		per_locus = per_locus.merge(meta, on="id", how="left")
 
 	# ------------------------------------------------------------------
-	# Save predictions (matches HyenaDNA predict.py output format)
+	# Save predictions (matches Caduceus predict.py output format)
 	# ------------------------------------------------------------------
 
-	output_df = splits["test"]["metadata"].copy()
-	output_df["pred_length"] = test_pred_cn
-	output_df["true_length"] = true_cn
-
-	# Sanity check
-	if not np.allclose(output_df["true_length"], output_df["copy_number"]):
-		raise ValueError("Mismatch between true_length and copy_number.")
+	orient_path = os.path.join(experiment_path, "predictions_test_by_orientation.tsv")
+	per_orientation.to_csv(orient_path, sep="\t", index=False)
+	print(f"\nSaved {len(per_orientation)} per-orientation rows to {orient_path}")
 
 	pred_path = os.path.join(experiment_path, "predictions_test.tsv")
-	output_df.to_csv(pred_path, sep="\t", index=False)
-	print(f"\nSaved {len(output_df)} test predictions to {pred_path}")
+	per_locus.to_csv(pred_path, sep="\t", index=False)
+	print(f"Saved {len(per_locus)} per-locus (RC-averaged) rows to {pred_path}")
 
 	# ------------------------------------------------------------------
 	# Save run summary
 	# ------------------------------------------------------------------
 
 	summary = {
-		"best_alpha": best_alpha,
-		"best_val_mse": float(best_val_mse),
-		"log_transform": log_transform,
 		"n_flanking_bp": n_flanking_bp,
 		"k_values": k_values,
+		"flank_mode": flank_mode,
+		"distance_bins": distance_bins,
 		"n_features": len(feature_names),
-		"n_train": X_train.shape[0],
-		"n_val": X_val.shape[0],
-		"n_test": X_test.shape[0],
-		"alpha_search": val_results,
+		"n_train": int(X_train.shape[0]),
+		"n_val": int(X_val.shape[0]),
+		"n_test": int(X_test.shape[0]),
+		"n_test_loci": int(len(per_locus)),
+		"targets": target_info,
 	}
 
 	summary_path = os.path.join(experiment_path, "summary.json")

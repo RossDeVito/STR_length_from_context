@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# All paths below (and inside the configs) are relative to the repo root, and
+# `python -m seq_models...` needs the repo root on sys.path, so run from there
+# regardless of where this script was invoked from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/../.." || exit 1
+
 OUTPUT_DIR="scripts/eval_preds/predictions/baseline"
 CONFIG_DIR="scripts/linear_baseline/configs"
 
