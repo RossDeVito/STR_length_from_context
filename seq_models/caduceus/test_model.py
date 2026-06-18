@@ -35,6 +35,7 @@ from seq_models.caduceus.model import (
 	SplitEmbedding,
 	compute_monitor_norms,
 	create_model,
+	fixed_inverse_variance_loss,
 	inverse_transform,
 	resolve_transforms,
 	transform_target,
@@ -148,6 +149,74 @@ def test_uncertainty_weighting_formula():
 	expected = math.exp(-1.0) * 2.0 + 1.0 + math.exp(0.0) * 3.0 + 0.0
 	assert torch.allclose(total, torch.tensor(expected), atol=1e-6)
 	assert torch.allclose(comp["a"]["weight"], torch.tensor(math.exp(-1.0)), atol=1e-6)
+
+
+# --- Fixed inverse-variance loss (MSE + Huber) ---------------------------------
+
+def test_fiv_mse_matches_legacy_formula():
+	preds = {"a": torch.tensor([1.0, 2.0, 3.0]), "b": torch.tensor([0.0, 1.0])}
+	targets = {"a": torch.tensor([1.5, 1.0, 4.0]), "b": torch.tensor([0.5, 0.5])}
+	norms = {"a": 4.0, "b": 0.25}
+	total, comp = fixed_inverse_variance_loss(preds, targets, norms)
+
+	mse_a = torch.mean((preds["a"] - targets["a"]) ** 2)
+	mse_b = torch.mean((preds["b"] - targets["b"]) ** 2)
+	expected = mse_a / norms["a"] + mse_b / norms["b"]
+	assert torch.allclose(total, expected)
+	# 'raw' must stay the plain per-task MSE so the val_fixed_loss monitor and
+	# rawloss logging are unaffected by the loss_fn choice.
+	assert torch.allclose(comp["a"]["raw"], mse_a)
+	assert torch.allclose(comp["b"]["raw"], mse_b)
+	assert comp["a"]["weight"] == pytest.approx(1.0 / norms["a"])
+
+
+def test_fiv_huber_quadratic_region_matches_mse():
+	# With the x2 factor, Huber's quadratic region equals z^2, so for residuals
+	# fully within delta (in std-units) the Huber total equals the MSE total.
+	norms = {"a": 4.0}  # sigma = 2
+	preds = {"a": torch.tensor([1.0, -2.0, 0.5])}
+	targets = {"a": torch.tensor([0.0, 0.0, 0.0])}  # |z| = |r|/2 <= 1 < delta=1.5
+	mse_total, _ = fixed_inverse_variance_loss(preds, targets, norms, loss_fn="mse")
+	huber_total, _ = fixed_inverse_variance_loss(
+		preds, targets, norms, loss_fn="huber", huber_delta=1.5
+	)
+	assert torch.allclose(huber_total, mse_total, atol=1e-6)
+
+
+def test_fiv_huber_linear_tail_is_smaller():
+	# A residual well beyond delta gets linear (robust) treatment, so its
+	# contribution is strictly less than the quadratic MSE term.
+	norms = {"a": 1.0}
+	preds = {"a": torch.tensor([10.0])}
+	targets = {"a": torch.tensor([0.0])}
+	mse_total, _ = fixed_inverse_variance_loss(preds, targets, norms, loss_fn="mse")
+	huber_total, _ = fixed_inverse_variance_loss(
+		preds, targets, norms, loss_fn="huber", huber_delta=1.0
+	)
+	# 2 * (delta * (|z| - 0.5 delta)) = 2 * (10 - 0.5) = 19 vs MSE 100.
+	assert torch.allclose(huber_total, torch.tensor(19.0), atol=1e-6)
+	assert float(huber_total) < float(mse_total)
+
+
+def test_fiv_huber_norms_none_is_weight_one():
+	# norms=None -> sigma=1, so Huber acts on the raw residual with weight 1.
+	preds = {"a": torch.tensor([5.0])}
+	targets = {"a": torch.tensor([0.0])}
+	total, comp = fixed_inverse_variance_loss(
+		preds, targets, None, loss_fn="huber", huber_delta=1.0
+	)
+	assert comp["a"]["weight"] == pytest.approx(1.0)
+	assert torch.allclose(total, torch.tensor(9.0), atol=1e-6)  # 2*(5-0.5)
+
+
+def test_fiv_huber_delta_is_live():
+	# Guards the single-source-of-truth wiring: passing different huber_delta must
+	# change the loss (regression test against a frozen/ignored delta).
+	preds = {"a": torch.tensor([5.0])}
+	targets = {"a": torch.tensor([0.0])}
+	t1, _ = fixed_inverse_variance_loss(preds, targets, None, loss_fn="huber", huber_delta=1.0)
+	t2, _ = fixed_inverse_variance_loss(preds, targets, None, loss_fn="huber", huber_delta=2.0)
+	assert not torch.allclose(t1, t2)
 
 
 # --- Monitor norms -------------------------------------------------------------
@@ -283,6 +352,50 @@ def test_single_objective_model_has_no_uncertainty_group(monkeypatch):
 	assert set(out.keys()) == {"length"}
 	groups = model.configure_optimizers()["optimizer"].param_groups
 	assert len(groups) == 2  # high-LR + backbone, no uncertainty group
+
+
+def test_fiv_huber_model_keeps_raw_losses_mse(monkeypatch):
+	# In the FIV+Huber path the per-task raw_losses (which feed val_fixed_loss)
+	# must stay MSE, while the training total uses the Huber objective.
+	monitor_norm = {"length": 2.0, "variation": 0.3}
+	model = _fake_model(
+		monkeypatch,
+		loss_weighting="fixed_inverse_variance",
+		fiv_loss="huber",
+		huber_delta=1.0,
+		monitor_norm=monitor_norm,
+	)
+	model.eval()
+	batch = {
+		"input_ids": _FAKE_INPUT_IDS,
+		"length": torch.tensor([5.0, 60.0]),       # large residual -> Huber tail
+		"variation": torch.tensor([0.25, 0.5]),
+	}
+	with torch.no_grad():
+		total, raw_losses, components, _ = model._common_step(batch)
+		preds_t = model(_FAKE_INPUT_IDS)
+
+	mse = nn.MSELoss()
+	mse_fiv_total = 0.0
+	for name in model.task_names:
+		target_t = transform_target(model.transforms[name], batch[name])
+		expected_mse = mse(preds_t[name], target_t)
+		assert torch.allclose(raw_losses[name], expected_mse)        # monitor unchanged
+		assert torch.allclose(components[name]["raw"], expected_mse)
+		mse_fiv_total = mse_fiv_total + expected_mse / monitor_norm[name]
+	# Huber objective differs from the plain MSE-FIV total given the tail residual.
+	assert not torch.allclose(total, mse_fiv_total)
+
+
+def test_fiv_loss_validation(monkeypatch):
+	with pytest.raises(ValueError):
+		_fake_model(monkeypatch, loss_weighting="fixed_inverse_variance", fiv_loss="bogus")
+	with pytest.raises(ValueError):
+		_fake_model(monkeypatch, loss_weighting="fixed_inverse_variance",
+					fiv_loss="huber", huber_delta=0.0)
+	# Huber requested outside the FIV path has no effect -> warn.
+	with pytest.warns(UserWarning):
+		_fake_model(monkeypatch, loss_weighting="uncertainty", fiv_loss="huber")
 
 
 # --- End-to-end short fit on CPU (fake backbone + real DataModule) -------------
