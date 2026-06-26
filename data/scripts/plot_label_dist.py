@@ -1,9 +1,9 @@
 """Plot mode copy number and heterozygosity distributions for filtered
-labeled STR datasets (motif lengths 1 and 2).
+labeled STR datasets across a configurable set of motif lengths.
 
-Loads two TSV files produced by create_STR_data_files.py (HipSTR/statSTR
-labeled STRs) and generates overlaid histogram plots comparing the two
-motif lengths.
+Loads one TSV file per motif length (produced by create_STR_data_files.py;
+HipSTR/statSTR labeled STRs) and generates overlaid/faceted histogram plots
+comparing the motif lengths.
 """
 
 import numpy as np
@@ -14,17 +14,20 @@ from scipy.stats import pearsonr, spearmanr
 
 
 # ======================================================================
-# Paths (edit these)
+# Config (edit these)
 # ======================================================================
 
-STR_LEN_1_PATH = (
-	"../STR_data/HipSTR_labeled_STRs/"
-	"str_len_1_n_flanking_10000.tsv"
-)
-STR_LEN_2_PATH = (
-	"../STR_data/HipSTR_labeled_STRs/"
-	"str_len_2_n_flanking_10000.tsv"
-)
+# Motif lengths to include in the plots.
+MOTIF_LENGTHS = [1, 2, 4]
+
+# Directory holding the per-length TSV files and the filename template
+# used to build each path. {length} is replaced by the motif length.
+STR_DATA_DIR = "../STR_data/HipSTR_labeled_STRs/"
+FILENAME_TEMPLATE = "str_len_{length}_n_flanking_10000.tsv"
+
+
+def path_for_length(length):
+	return STR_DATA_DIR + FILENAME_TEMPLATE.format(length=length)
 
 
 # ======================================================================
@@ -37,27 +40,29 @@ if __name__ == "__main__":
 	# Load data
 	# ------------------------------------------------------------------
 	print("Loading data...")
-	df1 = pd.read_csv(STR_LEN_1_PATH, sep="\t")
-	df2 = pd.read_csv(STR_LEN_2_PATH, sep="\t")
+	dfs = {}
+	for length in MOTIF_LENGTHS:
+		df = pd.read_csv(path_for_length(length), sep="\t")
+		# Drop RC duplicates so each locus is counted once
+		df = df[~df["rev_comp"]].reset_index(drop=True)
+		df["motif_len"] = length
+		dfs[length] = df
+		print(f"  Motif length {length}: {len(df)} loci")
 
-	# Drop RC duplicates so each locus is counted once
-	df1 = df1[~df1["rev_comp"]].reset_index(drop=True)
-	df2 = df2[~df2["rev_comp"]].reset_index(drop=True)
+	labels = {length: f"Motif length {length}" for length in MOTIF_LENGTHS}
 
-	df1["motif_len"] = 1
-	df2["motif_len"] = 2
-	combined = pd.concat([df1, df2], ignore_index=True)
+	combined = pd.concat(dfs.values(), ignore_index=True)
 	combined["motif_len"] = combined["motif_len"].astype(str)
-
-	print(f"  Motif length 1: {len(df1)} loci")
-	print(f"  Motif length 2: {len(df2)} loci")
+	# Keep a consistent hue ordering across plots
+	hue_order = [str(length) for length in MOTIF_LENGTHS]
 
 	# ------------------------------------------------------------------
 	# Correlations: heterozygosity vs mode / reference copy number
 	# ------------------------------------------------------------------
 	print("\nCorrelations with heterozygosity:")
-	for df, label in zip([df1, df2], ["Motif length 1", "Motif length 2"]):
-		print(f"  {label} (n = {len(df):,}):")
+	for length in MOTIF_LENGTHS:
+		df = dfs[length]
+		print(f"  {labels[length]} (n = {len(df):,}):")
 		for col, name in [
 			("mode_copy_number", "mode copy number"),
 			("ref_copy_number", "reference copy number"),
@@ -72,20 +77,22 @@ if __name__ == "__main__":
 	# log(mode copy number + 1). Spearman is unchanged by these monotonic
 	# transforms; Pearson can differ.
 	print("\nCorrelations between arcsin(sqrt(het)) and log(mode copy number + 1):")
-	for df, label in zip([df1, df2], ["Motif length 1", "Motif length 2"]):
+	for length in MOTIF_LENGTHS:
+		df = dfs[length]
 		het_t = np.arcsin(np.sqrt(df["heterozygosity"]))
 		log_mode = np.log1p(df["mode_copy_number"])
 		pear_r, pear_p = pearsonr(log_mode, het_t)
 		spear_r, spear_p = spearmanr(log_mode, het_t)
-		print(f"  {label} (n = {len(df):,}):")
+		print(f"  {labels[length]} (n = {len(df):,}):")
 		print(f"    Pearson  r = {pear_r:+.3f}  (p = {pear_p:.2e})")
 		print(f"    Spearman r = {spear_r:+.3f}  (p = {spear_p:.2e})")
 
 	print("\nCorrelations between mode and reference copy number:")
-	for df, label in zip([df1, df2], ["Motif length 1", "Motif length 2"]):
+	for length in MOTIF_LENGTHS:
+		df = dfs[length]
 		pear_r, pear_p = pearsonr(df["mode_copy_number"], df["ref_copy_number"])
 		spear_r, spear_p = spearmanr(df["mode_copy_number"], df["ref_copy_number"])
-		print(f"  {label} (n = {len(df):,}):")
+		print(f"  {labels[length]} (n = {len(df):,}):")
 		print(f"    Pearson  r = {pear_r:+.3f}  (p = {pear_p:.2e})")
 		print(f"    Spearman r = {spear_r:+.3f}  (p = {spear_p:.2e})")
 
@@ -98,6 +105,7 @@ if __name__ == "__main__":
 		data=combined,
 		x="heterozygosity",
 		hue="motif_len",
+		hue_order=hue_order,
 		stat="proportion",
 		common_norm=False,
 		element="step",
@@ -122,6 +130,7 @@ if __name__ == "__main__":
 		data=combined,
 		x="het_transformed",
 		hue="motif_len",
+		hue_order=hue_order,
 		stat="proportion",
 		common_norm=False,
 		element="step",
@@ -139,9 +148,12 @@ if __name__ == "__main__":
 	# Mode copy number distribution
 	# ------------------------------------------------------------------
 	print("\nPlotting mode copy number...")
-	fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+	n = len(MOTIF_LENGTHS)
+	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False)
+	axes = axes[0]
 
-	for ax, df, label in zip(axes, [df1, df2], ["Motif length 1", "Motif length 2"]):
+	for ax, length in zip(axes, MOTIF_LENGTHS):
+		df = dfs[length]
 		sns.histplot(
 			df["mode_copy_number"],
 			stat="proportion",
@@ -153,7 +165,7 @@ if __name__ == "__main__":
 		)
 		ax.set_xlabel("Mode copy number")
 		ax.set_ylabel("Proportion of loci")
-		ax.set_title(f"{label}  (n = {len(df):,})")
+		ax.set_title(f"{labels[length]}  (n = {len(df):,})")
 
 		q = df["mode_copy_number"].quantile([0.5, 0.95, 0.99])
 		stats_text = (
@@ -180,9 +192,11 @@ if __name__ == "__main__":
 	# (matches the target transform used for model training)
 	# ------------------------------------------------------------------
 	print("\nPlotting log(mode copy number + 1)...")
-	fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False)
+	axes = axes[0]
 
-	for ax, df, label in zip(axes, [df1, df2], ["Motif length 1", "Motif length 2"]):
+	for ax, length in zip(axes, MOTIF_LENGTHS):
+		df = dfs[length]
 		log_mode = np.log1p(df["mode_copy_number"])
 		sns.histplot(
 			log_mode,
@@ -195,7 +209,7 @@ if __name__ == "__main__":
 		)
 		ax.set_xlabel("log(mode copy number + 1)")
 		ax.set_ylabel("Proportion of loci")
-		ax.set_title(f"{label}  (n = {len(df):,})")
+		ax.set_title(f"{labels[length]}  (n = {len(df):,})")
 
 		q = log_mode.quantile([0.5, 0.95, 0.99])
 		stats_text = (
@@ -221,9 +235,11 @@ if __name__ == "__main__":
 	# Joint view: heterozygosity vs mode copy number
 	# ------------------------------------------------------------------
 	print("\nPlotting joint heterozygosity vs mode copy number...")
-	fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False)
+	axes = axes[0]
 
-	for ax, df, label in zip(axes, [df1, df2], ["Motif length 1", "Motif length 2"]):
+	for ax, length in zip(axes, MOTIF_LENGTHS):
+		df = dfs[length]
 		ax.hexbin(
 			df["mode_copy_number"],
 			df["heterozygosity"],
@@ -234,7 +250,7 @@ if __name__ == "__main__":
 		)
 		ax.set_xlabel("Mode copy number")
 		ax.set_ylabel("Heterozygosity")
-		ax.set_title(f"{label}  (n = {len(df):,})")
+		ax.set_title(f"{labels[length]}  (n = {len(df):,})")
 
 	plt.tight_layout()
 	plt.show()
