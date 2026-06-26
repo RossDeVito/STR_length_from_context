@@ -11,7 +11,7 @@ N_FLANKING=10000
 HIPSTR_STATS="../../STR_data/HipSTR_data/1000G_HipSTR_stats.tsv"
 PRETRAIN_BED="../../basenji_splits/sequences_human.bed"
 
-for STR_LEN in 1 2 3 4 5 6
+for STR_LEN in 3 4 5 6
 do
 
 	OUT_DIR="../../STR_data/HipSTR_labeled_STRs"
