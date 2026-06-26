@@ -23,7 +23,6 @@ import warnings
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers import (
 	AutoModel,
 	AutoConfig,
@@ -235,66 +234,36 @@ def uncertainty_weighted_loss(raw_losses, log_vars):
 	return total, components
 
 
-def fixed_inverse_variance_loss(preds, targets, norms, loss_fn="mse", huber_delta=1.0):
+def fixed_inverse_variance_loss(raw_losses, norms):
 	""" Fixed inverse-variance weighting of per-task losses.
 
-	Each task loss is weighted by its frozen per-task inverse variance
-	(1 / sigma_i^2) and summed. For the MSE variant this equals
-	`sum_i mean((pred - target)^2) / sigma_i^2`, which is exactly the quantity
-	logged as `{stage}_fixed_loss` for checkpoint selection, used here as the
-	training objective instead of the learned uncertainty weighting. The weights
-	are fixed (not learned), so there is no log-variance regularizer term.
-
-	Because `1 / sigma^2` is a constant that moves inside the mean, the MSE
-	objective is the mean of *squared standardized residuals*:
-	`sum_i mean((r_i / sigma_i)^2)` with `r_i = pred - target`. The Huber variant
-	generalizes this by applying Huber to the standardized residual `z = r / sigma`
-	with a fixed `delta` in standard-deviation units:
-	`sum_i mean(Huber_delta(r_i / sigma_i))`. Standardizing *before* the Huber
-	nonlinearity (rather than dividing a raw Huber loss by sigma^2) is what keeps
-	the transition point `delta` at the same number of std across tasks whose
-	transformed targets live on different scales.
-
-	The Huber term is multiplied by 2 so its quadratic region is `z^2` (PyTorch's
-	Huber uses `0.5 z^2`); with that factor `huber_delta -> inf` reproduces the
-	MSE objective exactly, keeping gradient magnitudes / clipping comparable.
+	Each task loss is divided by its frozen per-task variance (i.e. weighted by
+	1 / sigma_i^2), then summed. This is exactly the quantity logged as
+	`{stage}_fixed_loss` for checkpoint selection, used here as the training
+	objective instead of the learned uncertainty weighting. The weights are
+	fixed (not learned), so there is no log-variance regularizer term.
 
 	Args:
-		preds (dict): task -> per-element prediction tensor (training-space).
-		targets (dict): task -> per-element target tensor (training-space).
-		norms (dict | None): task -> per-task variance sigma_i^2 (frozen). If None,
-			each variance is 1 (plain sum / weight 1).
-		loss_fn (str): "mse" (default, behavior-identical to the legacy
-			sum(MSE_i / sigma_i^2)) or "huber".
-		huber_delta (float): Huber transition point in std-units. Only used when
-			loss_fn == "huber"; read at call time so a config sweep takes effect.
+		raw_losses (dict): task -> scalar loss tensor (native training-space).
+		norms (dict | None): task -> per-task variance (frozen). If None, each
+			weight is 1 (plain sum).
 
 	Returns:
 		(total_loss, components): components[task] = dict with 's' (None),
-			'weight' (1 / variance), 'weighted' (this task's contribution to total)
-			and 'raw' (the plain per-task MSE, so the fixed-loss monitor and
-			rawloss logging stay MSE-based regardless of loss_fn).
+			'weight' (1 / variance), 'weighted' (weight * L) and 'raw' (L).
 	"""
 	total = 0.0
 	components = {}
-	for name in preds:
+	for name, raw in raw_losses.items():
 		norm = 1.0 if norms is None else max(float(norms[name]), 1e-8)
 		weight = 1.0 / norm
-		resid = preds[name] - targets[name]
-		mse = torch.mean(resid ** 2)
-		if loss_fn == "huber":
-			z = resid / math.sqrt(norm)
-			weighted = 2.0 * F.huber_loss(
-				z, torch.zeros_like(z), delta=huber_delta, reduction="mean"
-			)
-		else:
-			weighted = weight * mse
+		weighted = weight * raw
 		total = total + weighted
 		components[name] = {
 			"s": None,
 			"weight": weight,
 			"weighted": weighted,
-			"raw": mse,
+			"raw": raw,
 		}
 	return total, components
 
@@ -314,10 +283,6 @@ def create_model(config):
 			"fixed_inverse_variance" (fixed 1/variance weighting, matching the
 			val monitor) or "sum". Default: "uncertainty" for multi-task, "sum"
 			for single-task.
-		fiv_loss (str): per-task loss used by the fixed_inverse_variance objective,
-			"mse" (default) or "huber". Huber is applied to standardized residuals
-			with a fixed delta; ignored by the other loss_weighting modes.
-		huber_delta (float): Huber transition point in std-units (default 1.0).
 		n_prefix_prompt_tokens / n_str_prompt_tokens / n_suffix_prompt_tokens (int).
 		head_hidden_layers (list[int]), head_dropout (float).
 		use_attention_pooling (bool, default True), attention_pooling_num_heads (int).
@@ -330,8 +295,6 @@ def create_model(config):
 		targets=config.get("targets", DEFAULT_TARGETS),
 		target_transforms=config.get("target_transforms", None),
 		loss_weighting=config.get("loss_weighting", None),
-		fiv_loss=config.get("fiv_loss", "mse"),
-		huber_delta=float(config.get("huber_delta", 1.0)),
 
 		n_prefix_prompt_tokens=config.get("n_prefix_prompt_tokens", 0),
 		n_str_prompt_tokens=config.get("n_str_prompt_tokens", 0),
@@ -365,8 +328,6 @@ class STRLengthModel(pl.LightningModule):
 		targets: dict,
 		target_transforms=None,
 		loss_weighting=None,
-		fiv_loss: str = "mse",
-		huber_delta: float = 1.0,
 
 		n_prefix_prompt_tokens: int = 0,
 		n_str_prompt_tokens: int = 0,
@@ -409,24 +370,6 @@ class STRLengthModel(pl.LightningModule):
 		self.loss_weighting = loss_weighting
 		self.use_uncertainty = loss_weighting == "uncertainty"
 		self.monitor_norm = monitor_norm
-
-		# Per-task loss for the fixed_inverse_variance objective. Defaults to MSE,
-		# so omitting these keys reproduces the legacy FIV behavior exactly.
-		valid_fiv_loss = {"mse", "huber"}
-		if fiv_loss not in valid_fiv_loss:
-			raise ValueError(
-				f"Unknown fiv_loss {fiv_loss!r}; expected one of {valid_fiv_loss}."
-			)
-		if huber_delta <= 0:
-			raise ValueError(f"huber_delta must be > 0, got {huber_delta}.")
-		if fiv_loss == "huber" and loss_weighting != "fixed_inverse_variance":
-			warnings.warn(
-				f"fiv_loss='huber' has no effect when loss_weighting="
-				f"{loss_weighting!r}; Huber only applies to the "
-				"fixed_inverse_variance path."
-			)
-		self.fiv_loss_fn = fiv_loss
-		self.huber_delta = float(huber_delta)
 
 		# Load Caduceus backbone (base model -> last_hidden_state).
 		backbone_config = AutoConfig.from_pretrained(
@@ -535,13 +478,11 @@ class STRLengthModel(pl.LightningModule):
 		preds_t = self(batch["input_ids"])
 
 		raw_losses = {}
-		targets_t = {}  # task -> transformed-space target (reused by the FIV loss)
 		native = {}  # task -> (native_pred (detached), native_target)
 		for name in self.task_names:
 			tname = self.transforms[name]
 			target_raw = batch[name]
 			target_t = transform_target(tname, target_raw)
-			targets_t[name] = target_t
 			raw_losses[name] = self.loss_fn(preds_t[name], target_t)
 			native[name] = (
 				inverse_transform(tname, preds_t[name].detach()),
@@ -554,14 +495,8 @@ class STRLengthModel(pl.LightningModule):
 			)
 		elif self.loss_weighting == "fixed_inverse_variance":
 			total, components = fixed_inverse_variance_loss(
-				preds_t, targets_t, self.monitor_norm,
-				loss_fn=self.fiv_loss_fn, huber_delta=self.huber_delta,
+				raw_losses, self.monitor_norm
 			)
-			# Keep the fixed-loss monitor and rawloss logging MSE-based even when
-			# the training objective uses Huber (components["raw"] is already MSE,
-			# but pin it to the canonical raw_losses for exactness).
-			for n in self.task_names:
-				components[n]["raw"] = raw_losses[n]
 		else:  # "sum"
 			total = sum(raw_losses.values())
 			components = {
