@@ -287,7 +287,8 @@ def create_model(config):
 		head_hidden_layers (list[int]), head_dropout (float).
 		use_attention_pooling (bool, default True), attention_pooling_num_heads (int).
 		optimizer_name ('Adam' or 'AdamW'), lr, backbone_lr, weight_decay.
-		scheduler_name, warmup_steps, scheduler_patience, scheduler_factor.
+		scheduler_name, warmup_steps, scheduler_patience, scheduler_factor,
+			scheduler_cooldown.
 		monitor_norm (dict): precomputed per-task variance for the val monitor.
 		gradient_checkpointing (bool).
 	"""
@@ -314,6 +315,7 @@ def create_model(config):
 		warmup_steps=config.get("warmup_steps", 100),
 		scheduler_patience=config.get("scheduler_patience", 3),
 		scheduler_factor=config.get("scheduler_factor", 0.1),
+		scheduler_cooldown=config.get("scheduler_cooldown", 0),
 
 		monitor_norm=config.get("monitor_norm", None),
 		use_gradient_checkpointing=config.get("gradient_checkpointing", False),
@@ -347,6 +349,7 @@ class STRLengthModel(pl.LightningModule):
 		warmup_steps: int = 100,
 		scheduler_patience: int = 3,
 		scheduler_factor: float = 0.1,
+		scheduler_cooldown: int = 0,
 
 		monitor_norm=None,
 		use_gradient_checkpointing: bool = False,
@@ -651,6 +654,7 @@ class STRLengthModel(pl.LightningModule):
 				mode="min",
 				factor=self.hparams.scheduler_factor,
 				patience=self.hparams.scheduler_patience,
+				cooldown=self.hparams.scheduler_cooldown,
 			)
 			return {
 				"optimizer": optimizer,

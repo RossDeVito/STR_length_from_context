@@ -1,7 +1,7 @@
 # --- Paths ---
-data_path: "data/STR_data/HipSTR_labeled_STRs/str_len_2_n_flanking_10000.tsv"
+data_path: "data/STR_data/HipSTR_labeled_STRs/str_len_1_n_flanking_10000.tsv"
 ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
-experiment_name: "caduceus_v0/str2/str2_f5000_fiv_v3"
+experiment_name: "caduceus_v0/str1/str1_f5000_fiv_v4"
 
 # --- Data ---
 batch_size: 16
