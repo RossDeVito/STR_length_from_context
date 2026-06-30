@@ -1,0 +1,17 @@
+# --- Model (dir relative to scripts/training/output/caduceus/) ---
+model_dir: "caduceus_v0/str2/str2_f5000_fiv_v3_2026-06-23_01-25-37"
+desc: "caduceus_v0/str2/str2_f5000_fiv_v3"
+
+# --- RPI ---
+split: "test"
+batch_size: 16
+num_workers: 8
+region_width: 100      # 50 regions/side over a 5000 bp flank
+n_permutations: 10
+seed: 36
+
+# --- Optional runtime knobs (str2 is large: ~4832 loci / 9664 rows) ---
+# This full run is ~9.7M forward passes and may exceed the 48h V100 limit.
+# Uncomment to dial back:
+# subsample_loci: 2500   # keep N unique loci (both orientations)
+# max_flank_bp: 2000     # only partition the inner N bp of each flank into regions

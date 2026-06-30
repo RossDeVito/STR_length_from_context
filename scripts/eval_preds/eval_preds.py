@@ -192,7 +192,7 @@ if __name__ == "__main__":
 	# ------------------------------------------------------------------
 	# Config
 	# ------------------------------------------------------------------
-	str_len = 1                 # which STR length to evaluate (1 or 2)
+	str_len = 2                 # which STR length to evaluate (1 or 2)
 	plot_metric = "Spearman_r"  # metric used to pick the "best" baseline/model
 
 	caduceus_pred_dir = f"predictions/caduceus/caduceus_v0/str{str_len}"
@@ -248,16 +248,19 @@ if __name__ == "__main__":
 				**get_metrics(pred=pred_df[f"pred_{task}"], true=pred_df[f"true_{task}"]),
 			})
 
-	# Caduceus predictions
+	# Caduceus predictions. Distinguish single- vs multi-objective runs by how
+	# many targets the run actually predicts.
 	for model_name in caduceus_model_names:
 		pred_df = load_predictions(os.path.join(caduceus_pred_dir, model_name))
 		if pred_df is None:
 			continue
 		pred_frames[("caduceus", model_name)] = pred_df
-		for task in detect_tasks(pred_df):
+		tasks = detect_tasks(pred_df)
+		model_type = "caduceus_multi" if len(tasks) > 1 else "caduceus_single"
+		for task in tasks:
 			results.append({
 				"model": model_name,
-				"model_type": "caduceus",
+				"model_type": model_type,
 				"target": task,
 				**get_metrics(pred=pred_df[f"pred_{task}"], true=pred_df[f"true_{task}"]),
 			})
@@ -299,18 +302,18 @@ if __name__ == "__main__":
 	for target in TARGETS:
 		true_col, pred_col = f"true_{target}", f"pred_{target}"
 
-		def best_of(model_type):
+		def best_of(model_types):
 			sub = results_df[
 				(results_df["target"] == target)
-				& (results_df["model_type"] == model_type)
+				& (results_df["model_type"].isin(model_types))
 			]
 			if len(sub) == 0:
 				return None
 			best = sub.loc[sub[plot_metric].idxmax()]
 			return best["model"], best[plot_metric]
 
-		best_lin = best_of("linear")
-		best_cad = best_of("caduceus")
+		best_lin = best_of(["linear"])
+		best_cad = best_of(["caduceus_single", "caduceus_multi"])
 
 		if best_lin is None or best_cad is None:
 			print(

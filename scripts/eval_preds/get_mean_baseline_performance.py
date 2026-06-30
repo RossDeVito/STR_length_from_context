@@ -91,11 +91,11 @@ if __name__ == '__main__':
 			os.path.join(data_dir, data_fname.format(str_len)),
 			str_len=str_len
 		)
-		for str_len in [1, 2]
+		for str_len in [1, 2, 4]
 	}
 
 	# Compute baselines per STR length and per target.
-	baseline_perf = {1: dict(), 2: dict()}
+	baseline_perf = {1: dict(), 2: dict(), 4: dict()}
 
 	for str_len, data_df in str_data.items():
 		train_df = data_df[data_df['split'] == 'train']
@@ -121,7 +121,7 @@ if __name__ == '__main__':
 			}
 
 	print("Baseline Performance:")
-	for str_len in [1, 2]:
+	for str_len in [1, 2, 4]:
 		print(f"STR Length {str_len}:")
 		for out_name in TARGETS:
 			print(f"  {out_name}:")

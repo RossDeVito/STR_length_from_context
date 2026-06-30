@@ -104,7 +104,7 @@ def infer_motif_len(str_df):
 	motif_len = round(
 		(row["str_end"] - row["str_start"]) / row["ref_copy_number"]
 	)
-	assert motif_len in (1, 2), (
+	assert 1 <= motif_len <= 6, (
 		f"Unexpected motif length {motif_len} inferred from first row"
 	)
 	return motif_len

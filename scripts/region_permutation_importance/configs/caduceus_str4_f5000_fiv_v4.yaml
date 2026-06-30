@@ -1,0 +1,15 @@
+# --- Model (dir relative to scripts/training/output/caduceus/) ---
+model_dir: "caduceus_v0/str4/str4_f5000_fiv_v4_2026-06-26_17-20-49"
+desc: "caduceus_v0/str4/str4_f5000_fiv_v4"
+
+# --- RPI ---
+split: "test"
+batch_size: 16
+num_workers: 8
+region_width: 100      # 50 regions/side over a 5000 bp flank
+n_permutations: 10
+seed: 36
+
+# --- Optional runtime knobs (omit for the full "as before" run) ---
+# subsample_loci: 2500   # keep N unique loci (both orientations) to cap runtime
+# max_flank_bp: 2000     # only partition the inner N bp of each flank into regions
