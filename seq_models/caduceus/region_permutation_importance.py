@@ -277,7 +277,8 @@ def subsample_dataset(dataset, n_loci, seed):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def predict_batched(model, input_ids, batch_size, device, task_names, transforms):
+def predict_batched(model, input_ids, batch_size, device, task_names, transforms,
+					progress_desc=None):
 	"""Run model forward in batches, returning native-space preds per task.
 
 	Args:
@@ -287,6 +288,9 @@ def predict_batched(model, input_ids, batch_size, device, task_names, transforms
 		device: torch.device for inference.
 		task_names: List of active target names.
 		transforms: Dict of task -> transform name (for inverse transform).
+		progress_desc: If set, show a batch-level tqdm bar with this description
+			(used for the otherwise-silent baseline pass; left off inside the
+			permutation loop, which has its own outer bar).
 
 	Returns:
 		Dict task -> (N,) numpy array of native-space predictions.
@@ -294,7 +298,11 @@ def predict_batched(model, input_ids, batch_size, device, task_names, transforms
 	preds = {name: [] for name in task_names}
 	n = input_ids.shape[0]
 
-	for start in range(0, n, batch_size):
+	starts = range(0, n, batch_size)
+	if progress_desc is not None:
+		starts = tqdm(starts, desc=progress_desc, leave=False)
+
+	for start in starts:
 		batch = input_ids[start:start + batch_size].to(device)
 		out_t = model(batch)  # dict task -> (B,) transformed space
 		for name in task_names:
@@ -496,7 +504,8 @@ def main():
 	# ------------------------------------------------------------------
 	print("Computing baseline predictions ...")
 	baseline_preds = predict_batched(
-		model, all_input_ids, batch_size, device, task_names, transforms
+		model, all_input_ids, batch_size, device, task_names, transforms,
+		progress_desc="Baseline",
 	)
 
 	# ------------------------------------------------------------------

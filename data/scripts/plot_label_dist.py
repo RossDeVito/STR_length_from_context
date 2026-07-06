@@ -18,7 +18,7 @@ from scipy.stats import pearsonr, spearmanr
 # ======================================================================
 
 # Motif lengths to include in the plots.
-MOTIF_LENGTHS = [1, 2, 4]
+MOTIF_LENGTHS = [1, 2, 3, 4, 5, 6]
 
 # Directory holding the per-length TSV files and the filename template
 # used to build each path. {length} is replaced by the motif length.
@@ -149,7 +149,7 @@ if __name__ == "__main__":
 	# ------------------------------------------------------------------
 	print("\nPlotting mode copy number...")
 	n = len(MOTIF_LENGTHS)
-	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False)
+	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False, sharey=True)
 	axes = axes[0]
 
 	for ax, length in zip(axes, MOTIF_LENGTHS):
@@ -192,7 +192,7 @@ if __name__ == "__main__":
 	# (matches the target transform used for model training)
 	# ------------------------------------------------------------------
 	print("\nPlotting log(mode copy number + 1)...")
-	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False)
+	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False, sharey=True)
 	axes = axes[0]
 
 	for ax, length in zip(axes, MOTIF_LENGTHS):
@@ -235,7 +235,7 @@ if __name__ == "__main__":
 	# Joint view: heterozygosity vs mode copy number
 	# ------------------------------------------------------------------
 	print("\nPlotting joint heterozygosity vs mode copy number...")
-	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False)
+	fig, axes = plt.subplots(1, n, figsize=(7 * n, 5), squeeze=False, sharey=True)
 	axes = axes[0]
 
 	for ax, length in zip(axes, MOTIF_LENGTHS):

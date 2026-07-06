@@ -8,7 +8,7 @@ Inputs:
                          hipstr_name  motif
   --out-file PATH      Output TSV (with header).
 
-Join key: (chrom, start, end). Expected to be 1-to-1. The script asserts
+Join key: (chrom, start). Expected to be 1-to-1. The script asserts
 1-to-1-ness on both sides and reports unmatched rows.
 """
 

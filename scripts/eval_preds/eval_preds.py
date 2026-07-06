@@ -94,11 +94,18 @@ def force_square_limits(ax):
 	ax.set_aspect('equal', adjustable='box')
 
 
-def plot_density_scatter(ax, df, true_col, pred_col, title, lims=None):
+def plot_density_scatter(ax, df, true_col, pred_col, title, lims=None,
+						 norm=None, add_colorbar=True):
 	"""Plot 1: 2D Histogram/Density Plot.
 
 	If ``lims`` (mn, mx) is given, use it for both axes instead of computing
-	limits from this df (lets side-by-side panels share x/y limits)."""
+	limits from this df (lets side-by-side panels share x/y limits).
+
+	If ``norm`` is given it is used for the color mapping (lets side-by-side
+	panels share a common color scale); otherwise a per-panel ``LogNorm`` is
+	used. Set ``add_colorbar=False`` to skip this panel's own colorbar (e.g.
+	when a single shared colorbar is drawn for both panels). Returns the
+	``QuadMesh`` mappable so callers can build a shared colorbar."""
 
 	if lims is not None:
 		mn, mx = lims
@@ -120,13 +127,14 @@ def plot_density_scatter(ax, df, true_col, pred_col, title, lims=None):
 		bins=50,
 		cmap='Blues',
 		cmin=1,
-		norm=LogNorm(),
+		norm=norm if norm is not None else LogNorm(),
 		range=[[mn, mx], [mn, mx]]  # <--- CRITICAL FIX
 	)
 
 	# 3. Add Colorbar without distorting the square
 	# "fraction=0.046, pad=0.04" aligns the colorbar height with a square plot
-	plt.colorbar(h[3], ax=ax, label='Count', fraction=0.046, pad=0.04)
+	if add_colorbar:
+		plt.colorbar(h[3], ax=ax, label='Count', fraction=0.046, pad=0.04)
 
 	# 4. Identity line
 	ax.plot([mn, mx], [mn, mx], 'r--', alpha=0.75, zorder=10, label='Perfect Prediction')
@@ -141,6 +149,8 @@ def plot_density_scatter(ax, df, true_col, pred_col, title, lims=None):
 	ax.set_xlim(mn, mx) # Ensure limits stick
 	ax.set_ylim(mn, mx)
 	ax.set_aspect('equal', adjustable='box')
+
+	return h[3]
 
 
 def plot_box_by_length(ax, df, true_col, pred_col):
@@ -192,7 +202,7 @@ if __name__ == "__main__":
 	# ------------------------------------------------------------------
 	# Config
 	# ------------------------------------------------------------------
-	str_len = 2                 # which STR length to evaluate (1 or 2)
+	str_len = 4                 # which STR length to evaluate (1 or 2)
 	plot_metric = "Spearman_r"  # metric used to pick the "best" baseline/model
 
 	caduceus_pred_dir = f"predictions/caduceus/caduceus_v0/str{str_len}"
@@ -339,17 +349,31 @@ if __name__ == "__main__":
 		buff = (mx - mn) * 0.05
 		lims = (mn - buff, mx + buff)
 
+		# Shared color scale across both panels: use the same LogNorm with a
+		# common vmax = max bin count over both histograms (computed with the
+		# same bins/range used for plotting).
+		hist_range = [[lims[0], lims[1]], [lims[0], lims[1]]]
+		vmax = max(
+			np.histogram2d(lin_df[true_col], lin_df[pred_col],
+						   bins=50, range=hist_range)[0].max(),
+			np.histogram2d(cad_df[true_col], cad_df[pred_col],
+						   bins=50, range=hist_range)[0].max(),
+		)
+		shared_norm = LogNorm(vmin=1, vmax=vmax)
+
 		fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 		plot_density_scatter(
 			axes[0], lin_df, true_col, pred_col,
 			f"Best baseline: {lin_name}\n{plot_metric}={lin_score:.3f}",
-			lims=lims,
+			lims=lims, norm=shared_norm, add_colorbar=False,
 		)
-		plot_density_scatter(
+		mappable = plot_density_scatter(
 			axes[1], cad_df, true_col, pred_col,
 			f"Best model: {cad_name}\n{plot_metric}={cad_score:.3f}",
-			lims=lims,
+			lims=lims, norm=shared_norm, add_colorbar=False,
 		)
 		fig.suptitle(f"STR length {str_len} | target: {target}", fontsize=14)
 		plt.tight_layout()
+		# Single shared colorbar spanning both panels.
+		fig.colorbar(mappable, ax=axes, label='Count', fraction=0.046, pad=0.04)
 		plt.show()
