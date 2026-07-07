@@ -4,8 +4,8 @@ ref_path: "data/STR_data/reference_genome/GRCh38_full_analysis_set_plus_decoy_hl
 experiment_name: "caduceus_v0/str4/str4_f10000_fiv_v4"
 
 # --- Data ---
-batch_size: 16
-accumulate_grad_batches: 16
+batch_size: 8
+accumulate_grad_batches: 32
 dataloader_num_workers: 4
 n_flanking_bp: 10000
 n_str_bp: 8
