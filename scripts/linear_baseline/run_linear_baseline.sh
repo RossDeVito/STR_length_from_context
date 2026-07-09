@@ -9,27 +9,36 @@ cd "${SCRIPT_DIR}/../.." || exit 1
 OUTPUT_DIR="scripts/eval_preds/predictions/baseline"
 CONFIG_DIR="scripts/linear_baseline/configs"
 
-# Check if an argument was provided
-if [ -z "$1" ]; then
+# Check that at least one config was provided
+if [ "$#" -eq 0 ]; then
   echo "Error: No config file specified."
-  echo "Usage: $0 <config_filename>"
+  echo "Usage: $0 <config_filename> [<config_filename> ...]"
   echo "Config files are located in ${CONFIG_DIR}"
   exit 1
 fi
 
-# Assign the first argument ($1) to CONFIG_FILE
-CONFIG_FILE="$1"
+echo "Running $# config(s): $*"
 
-# Print what is running for verification
-echo "Running linear baseline with config: $CONFIG_FILE"
+# Run each config in sequence, stopping immediately if any one fails.
+for CONFIG_FILE in "$@"; do
+  echo "=== Running linear baseline with config: ${CONFIG_FILE} ==="
 
-# Confirm the config file exists
-if [ ! -f "${CONFIG_DIR}/${CONFIG_FILE}" ]; then
-  echo "Error: Config file ${CONFIG_DIR}/${CONFIG_FILE} does not exist."
-  exit 1
-fi
+  # Confirm the config file exists
+  if [ ! -f "${CONFIG_DIR}/${CONFIG_FILE}" ]; then
+    echo "Error: Config file ${CONFIG_DIR}/${CONFIG_FILE} does not exist."
+    exit 1
+  fi
 
-# Run the command
-python -m seq_models.linear.train_and_pred \
-    --config "${CONFIG_DIR}/${CONFIG_FILE}" \
-    --output_dir "${OUTPUT_DIR}"
+  # Run the command
+  python -m seq_models.linear.train_and_pred \
+      --config "${CONFIG_DIR}/${CONFIG_FILE}" \
+      --output_dir "${OUTPUT_DIR}"
+  status=$?
+
+  if [ "${status}" -ne 0 ]; then
+    echo "Error: config ${CONFIG_FILE} failed with exit code ${status}. Stopping."
+    exit "${status}"
+  fi
+done
+
+echo "All configs completed successfully."

@@ -1,13 +1,31 @@
-""" Evaluate predictions from multiple models. 
+""" Compare the best model at each STR length, across STR lengths.
 
-Also plots against baseline overall and by motif means, created by
-get_baseline_performance.py and saved in 
-predictions/baseline/mean_performance.json
+For a configurable list of STR lengths (``str_lens``), this picks the best
+Caduceus model and the best linear baseline at each length and plots how the
+chosen metrics change with repeat-unit length. Mean baselines (overall / by
+motif), where available in ``predictions/baseline/mean_performance.json``, are
+drawn as dashed reference lines.
+
+Two selection knobs let you curate the comparison:
+
+  * ``model_overrides`` -- pin a specific Caduceus run per length, replacing the
+	auto best-by-metric pick. Handy to compare one config family across lengths
+	(e.g. all the ``f5000_fiv_v4`` runs) rather than the per-length best.
+  * ``baseline_type`` -- pin a single linear-baseline variant (pooled / sep /
+	pooled_dist / sep_dist) for every length instead of the per-length best.
+
+Prediction TSVs (predictions_test.tsv, one row per locus after RC-averaging)
+have columns:
+
+	id  pred_length  pred_variation  true_length  true_variation
+	chrom  str_start  str_end  motif  split
+
+Models may predict only one of the two targets (length, variation); the tasks
+present are detected per prediction file.
 """
 
 import os
 import json
-from pprint import pprint
 
 import pandas as pd
 import numpy as np
@@ -15,10 +33,24 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import sklearn.metrics as sk_metrics
 import scipy.stats as stats
-from matplotlib.colors import LogNorm
+
+
+# Multi-objective targets (output_name -> data column), mirroring the Caduceus
+# config. Used for display ordering; the tasks actually present are detected
+# per prediction file.
+TARGETS = {
+	"length": "mode_copy_number",
+	"variation": "heterozygosity",
+}
+
+# Error metrics: lower is better (ascending sort / idxmin). Everything else:
+# higher is better.
+ERROR_METRICS = ("MSE", "MAE", "MAPE")
 
 
 def get_metrics(pred, true):
+	"""Regression metrics for a set of predictions (replicated from
+	eval_preds.get_metrics so this script is self-contained)."""
 	mse = sk_metrics.mean_squared_error(true, pred)
 	mape = sk_metrics.mean_absolute_percentage_error(true, pred)
 	mae = sk_metrics.mean_absolute_error(true, pred)
@@ -38,244 +70,220 @@ def get_metrics(pred, true):
 	}
 
 
-if __name__ == '__main__':
-
-	# by_len_metric = "Spearman_r"
-	# by_len_metric = "MAPE"
-	by_len_metric = "R2"
-
-	pred_dir = {
-		1: "predictions/soft_prompt/str1/v2",
-		2: "predictions/soft_prompt/str2/v2"
-	}
-
-	model_names = [
-		"str1_l1m_f100_p128_log_2026-03-29_16-23-14",
-		"str1_l1m_f2000_p128_log_2026-03-28_01-17-25",
-
-		"str2_l1m_f100_p128_log_2026-03-27_13-08-24",
-		"str2_l1m_f2000_p128_log_2026-03-27_13-08-24",
-		"str2_l1m_f4000_p128_log_2026-03-27_13-08-49_resumed_epoch62",
-		"str2_l1m_f6000_p128_log_2026-03-27_13-09-31_resumed_epoch40"
+def detect_tasks(df):
+	"""Return the targets for which both pred_{task} and true_{task} exist."""
+	return [
+		task for task in TARGETS
+		if f"pred_{task}" in df.columns and f"true_{task}" in df.columns
 	]
 
-	lin_pred_dir = {
-		1: "predictions/baseline/lin/str1",
-		2: "predictions/baseline/lin/str2"
-	}
 
-	lin_model_names = [
-		"str1_f100_log",
-		"str1_f2000_log",
-		"str1_f4000_log",
-		"str1_f6000_log",
-		"str1_f8000_log",
-		"str2_f100_log",
-		"str2_f2000_log",
-		"str2_f4000_log",
-		"str2_f6000_log",
-		"str2_f8000_log",
-	]
+def load_predictions(pred_dir):
+	"""Load a model's per-locus predictions_test.tsv (or None if missing)."""
+	pred_path = os.path.join(pred_dir, "predictions_test.tsv")
+	if not os.path.exists(pred_path):
+		print(f"  [skip] missing {pred_path}")
+		return None
+	return pd.read_csv(pred_path, sep="\t")
 
+
+def list_run_dirs(parent):
+	"""Sorted run subdirectory names under ``parent`` (empty if not a dir)."""
+	if not os.path.isdir(parent):
+		return []
+	return sorted(
+		d for d in os.listdir(parent)
+		if os.path.isdir(os.path.join(parent, d))
+	)
+
+
+def best_by_metric(rows, metric):
+	"""Pick the best of ``rows`` (list of metric dicts) by ``metric``. Lower is
+	better for error metrics, higher otherwise. Rows with a NaN in ``metric``
+	are ignored. Returns the winning row, or None if none are comparable."""
+	comparable = [r for r in rows if not pd.isna(r.get(metric, np.nan))]
+	if not comparable:
+		return None
+	key = lambda r: r[metric]
+	return (min if metric in ERROR_METRICS else max)(comparable, key=key)
+
+
+if __name__ == "__main__":
+
+	# ------------------------------------------------------------------
+	# Config
+	# ------------------------------------------------------------------
+	str_lens = [1, 2, 3, 4, 5, 6]
+
+	plot_metrics = ["Spearman_r", "R2"]  # one figure per metric per target
+	select_metric = "Spearman_r"         # metric used to auto-pick the best run
+
+	# --- Model (Caduceus) selection ---
+	caduceus_root = "predictions/caduceus/caduceus_v0"
+	# Optionally pin specific Caduceus runs per length (REPLACES auto-best-by-
+	# metric). Lets you compare one config family across lengths, e.g. the
+	# f5000_fiv_v4 runs:
+	# model_overrides = {
+	#     1: "str1_f5000_fiv_v4_2026-06-26_17-20-55",
+	#     2: "str2_f5000_fiv_v4_2026-06-26_17-20-42",
+	#     4: "str4_f5000_fiv_v4_2026-06-26_17-20-49",
+	# }
+	model_overrides = {}
+
+	# --- Linear baseline selection ---
+	lin_root = "predictions/baseline/lin"
+	# None => best linear variant per length by select_metric. Or pin ONE
+	# variant for every length: "pooled" | "sep" | "pooled_dist" | "sep_dist".
+	baseline_type = None
+
+	mean_perf_path = "predictions/baseline/mean_performance.json"
+
+	# ------------------------------------------------------------------
+	# Build a unified results table: one row per (str_len, target, series).
+	# series in {"model", "linear", "overall_mean", "motif_mean"}.
+	# ------------------------------------------------------------------
 	results = []
 
-	# ------------------------------------------------------------------
-	# HyenaDNA models
-	# ------------------------------------------------------------------
+	# Mean baselines (metrics-only, from JSON).
+	with open(mean_perf_path, "r") as f:
+		mean_perf = json.load(f)
 
-	for model_name in model_names:
+	for str_len in str_lens:
 
-		if model_name.startswith("str1_"):
-			pred_path = os.path.join(pred_dir[1], model_name, "predictions_test.tsv")
-		elif model_name.startswith("str2_"):
-			pred_path = os.path.join(pred_dir[2], model_name, "predictions_test.tsv")
+		# --- Caduceus model: pin override or auto-best per target ---
+		cad_dir = os.path.join(caduceus_root, f"str{str_len}")
+		if str_len in model_overrides:
+			cad_runs = [model_overrides[str_len]]
 		else:
-			raise ValueError(f"Unknown model prefix for model: {model_name}")
+			cad_runs = list_run_dirs(cad_dir)
 
-		# Load predictions
-		pred_df = pd.read_csv(pred_path, sep="\t")
+		cad_rows = []  # per (run, target) metric dicts
+		for run in cad_runs:
+			pred_df = load_predictions(os.path.join(cad_dir, run))
+			if pred_df is None:
+				continue
+			for task in detect_tasks(pred_df):
+				cad_rows.append({
+					"target": task,
+					"model": run,
+					**get_metrics(pred=pred_df[f"pred_{task}"], true=pred_df[f"true_{task}"]),
+				})
 
-		# Compute metrics
-		metrics = get_metrics(
-			pred=pred_df["pred_length"],
-			true=pred_df["true_length"]
-		)
-
-		# Get attributes from model name
-		# str{str_len}_l1m_f{n_flank}_p{prompt_len}...
-		str_len = model_name.split("_")[0][3:]
-		n_flank = model_name.split("_")[2][1:]
-		prompt_len = model_name.split("_")[3][1:]
-
-		results.append({
-			"model": model_name,
-			"model_type": "hyenaDNA",
-			"str_len": str_len,
-			"n_flank": n_flank,
-			"prompt_len": prompt_len,
-			**metrics
-		})
-
-	# ------------------------------------------------------------------
-	# Linear baseline models
-	# ------------------------------------------------------------------
-
-	for model_name in lin_model_names:
-
-		if model_name.startswith("str1_"):
-			pred_path = os.path.join(lin_pred_dir[1], model_name, "predictions_test.tsv")
-		elif model_name.startswith("str2_"):
-			pred_path = os.path.join(lin_pred_dir[2], model_name, "predictions_test.tsv")
+		# --- Linear baseline: pin variant or auto-best per target ---
+		lin_dir = os.path.join(lin_root, f"str{str_len}")
+		if baseline_type is not None:
+			lin_runs = [f"str{str_len}_f5000_{baseline_type}"]
 		else:
-			raise ValueError(f"Unknown model prefix for linear model: {model_name}")
+			lin_runs = list_run_dirs(lin_dir)
 
-		# Load predictions
-		pred_df = pd.read_csv(pred_path, sep="\t")
+		lin_rows = []
+		for run in lin_runs:
+			pred_df = load_predictions(os.path.join(lin_dir, run))
+			if pred_df is None:
+				continue
+			for task in detect_tasks(pred_df):
+				lin_rows.append({
+					"target": task,
+					"model": run,
+					**get_metrics(pred=pred_df[f"pred_{task}"], true=pred_df[f"true_{task}"]),
+				})
 
-		# Compute metrics
-		metrics = get_metrics(
-			pred=pred_df["pred_length"],
-			true=pred_df["true_length"]
-		)
+		# Keep the best run per target for each series.
+		for target in TARGETS:
+			best_cad = best_by_metric(
+				[r for r in cad_rows if r["target"] == target], select_metric
+			)
+			if best_cad is not None:
+				results.append({"str_len": str_len, "series": "model", **best_cad})
 
-		# Get attributes from model name
-		# str{str_len}_f{n_flank}_log
-		parts = model_name.split("_")
-		str_len = parts[0][3:]
-		n_flank = parts[1][1:]
+			best_lin = best_by_metric(
+				[r for r in lin_rows if r["target"] == target], select_metric
+			)
+			if best_lin is not None:
+				results.append({"str_len": str_len, "series": "linear", **best_lin})
 
-		results.append({
-			"model": model_name,
-			"model_type": "linear",
-			"str_len": str_len,
-			"n_flank": n_flank,
-			"prompt_len": None,
-			**metrics
-		})
+		# --- Mean baselines from JSON (available for a subset of lengths) ---
+		mean_perf_len = mean_perf.get(str(str_len), {})
+		for target, by_type in mean_perf_len.items():
+			for baseline_type_name, metrics in by_type.items():  # overall_mean / motif_mean
+				results.append({
+					"str_len": str_len,
+					"series": baseline_type_name,
+					"target": target,
+					"model": baseline_type_name,
+					**metrics,
+				})
 
 	results_df = pd.DataFrame(results)
-	results_df["n_flank"] = results_df["n_flank"].astype(int)
 
-	hyena_df = results_df[results_df["model_type"] == "hyenaDNA"].copy()
-	hyena_df["prompt_len"] = hyena_df["prompt_len"].astype(int)
-	lin_df = results_df[results_df["model_type"] == "linear"]
-
-	str1_hyena_df = hyena_df[hyena_df["str_len"] == "1"]
-	str2_hyena_df = hyena_df[hyena_df["str_len"] == "2"]
-	str1_lin_df = lin_df[lin_df["str_len"] == "1"]
-	str2_lin_df = lin_df[lin_df["str_len"] == "2"]
-
-	# Load baseline performance JSON
-	with open('predictions/baseline/mean_performance.json', 'r') as file:
-		baseline_perf = json.load(file)
-
-	print("Mean baseline performance")
-	pprint(baseline_perf)
-
-	# Print metrics
+	# ------------------------------------------------------------------
+	# Print metrics, one table per target (rows sorted by STR length).
+	# ------------------------------------------------------------------
 	display_cols = [
-		"model", "model_type",
+		"str_len", "series", "model",
 		"MSE", "MAE", "MAPE", "R2",
 		"Pearson_r", "Pearson_p",
-		"Spearman_r", "Spearman_p"
+		"Spearman_r", "Spearman_p",
 	]
-	print("\nLength 1 STR Results:")
-	str1_df = results_df[results_df["str_len"] == "1"]
-	if len(str1_df) > 0:
-		print(str1_df[display_cols].to_string(
-			index=False,
-			max_colwidth=30,
-		))
+	series_order = {"model": 0, "linear": 1, "overall_mean": 2, "motif_mean": 3}
 
-	print("\nLength 2 STR Results:")
-	str2_df = results_df[results_df["str_len"] == "2"]
-	if len(str2_df) > 0:
-		print(str2_df[display_cols].to_string(
-			index=False,
-			max_colwidth=30,
-		))
+	for target in TARGETS:
+		target_df = results_df[results_df["target"] == target].copy()
+		if len(target_df) == 0:
+			continue
+		target_df["_series_ord"] = target_df["series"].map(series_order)
+		target_df = target_df.sort_values(by=["str_len", "_series_ord"])
+		print(f"\n===== Target: {target} =====")
+		print(target_df[display_cols].to_string(index=False, max_colwidth=40))
 
 	# ------------------------------------------------------------------
-	# Plot performance by flank length
+	# Plot: metric vs STR length, one figure per (target, metric). Lines for
+	# the best model and best linear baseline; dashed reference lines for the
+	# mean baselines where available.
 	# ------------------------------------------------------------------
+	sns.set_theme(style="whitegrid")
 
-	for str_len_str, hyena_sub, lin_sub in [
-		("1", str1_hyena_df, str1_lin_df),
-		("2", str2_hyena_df, str2_lin_df),
-	]:
-		if len(hyena_sub) <= 1 and len(lin_sub) == 0:
+	model_label = "Caduceus (pinned)" if model_overrides else "Caduceus (best)"
+	linear_label = (
+		f"Linear ({baseline_type})" if baseline_type is not None else "Linear (best)"
+	)
+	series_style = {
+		"model": dict(label=model_label, marker="o", linestyle="-", color="C0"),
+		"linear": dict(label=linear_label, marker="s", linestyle="-", color="C1"),
+		"overall_mean": dict(label="Overall Mean", marker="x", linestyle="--", color="red"),
+		"motif_mean": dict(label="STR Motif Mean", marker="^", linestyle="--", color="orange"),
+	}
+
+	for target in TARGETS:
+		target_df = results_df[results_df["target"] == target]
+		if len(target_df) == 0:
 			continue
 
-		plt.figure(figsize=(8, 6))
+		for metric in plot_metrics:
+			plt.figure(figsize=(8, 6))
+			plotted_any = False
 
-		# HyenaDNA line
-		if len(hyena_sub) > 1:
-			sns.lineplot(
-				data=hyena_sub,
-				x="n_flank",
-				y=by_len_metric,
-				marker="o",
-				label="HyenaDNA",
-			)
-		elif len(hyena_sub) == 1:
-			plt.scatter(
-				hyena_sub["n_flank"],
-				hyena_sub[by_len_metric],
-				marker="o",
-				label="HyenaDNA",
-				zorder=5,
-			)
+			for series, style in series_style.items():
+				sub = target_df[target_df["series"] == series]
+				# Align to str_lens ordering and drop lengths with no / NaN value.
+				sub = sub[sub["str_len"].isin(str_lens)].sort_values("str_len")
+				xs = sub["str_len"].to_numpy()
+				ys = sub[metric].to_numpy(dtype=float)
+				mask = ~np.isnan(ys)
+				if not mask.any():
+					continue
+				plt.plot(xs[mask], ys[mask], **style, zorder=5)
+				plotted_any = True
 
-		# Linear baseline points
-		if len(lin_sub) > 1:
-			sns.lineplot(
-				data=lin_sub,
-				x="n_flank",
-				y=by_len_metric,
-				marker="s",
-				label="Linear (Ridge)",
-			)
-		elif len(lin_sub) == 1:
-			plt.scatter(
-				lin_sub["n_flank"],
-				lin_sub[by_len_metric],
-				marker="s",
-				label="Linear (Ridge)",
-				zorder=5,
-			)
+			if not plotted_any:
+				plt.close()
+				continue
 
-		# Mean baselines
-		overall_mean_val = baseline_perf[str_len_str]["overall_mean"].get(by_len_metric)
-		if overall_mean_val is not None and not np.isnan(overall_mean_val):
-			plt.axhline(
-				y=overall_mean_val,
-				color='red',
-				linestyle='--',
-				label='Overall Mean',
-			)
-
-		motif_mean_val = baseline_perf[str_len_str]["motif_mean"].get(by_len_metric)
-		if motif_mean_val is not None and not np.isnan(motif_mean_val):
-			plt.axhline(
-				y=motif_mean_val,
-				color='orange',
-				linestyle='--',
-				label='STR Motif Mean',
-			)
-
-		# Collect all plotted values for y-axis scaling
-		all_vals = []
-		all_vals.extend(hyena_sub[by_len_metric].tolist())
-		all_vals.extend(lin_sub[by_len_metric].tolist())
-		if overall_mean_val is not None and not np.isnan(overall_mean_val):
-			all_vals.append(overall_mean_val)
-		if motif_mean_val is not None and not np.isnan(motif_mean_val):
-			all_vals.append(motif_mean_val)
-
-		plt.title(f"Length {str_len_str} STR Prediction Performance by Flank Length")
-		plt.xlabel("Flank Length (bp)")
-		plt.ylabel(by_len_metric)
-		plt.ylim(bottom=0, top=1.05 * max(all_vals))
-		plt.grid(True)
-		plt.legend(loc='lower right')
-		plt.show()
+			plt.title(f"{target.capitalize()} prediction performance across STR lengths")
+			plt.xlabel("STR motif length (bp)")
+			plt.ylabel(metric)
+			plt.xticks(str_lens)
+			plt.grid(True)
+			plt.legend(loc="best")
+			plt.tight_layout()
+			plt.show()
