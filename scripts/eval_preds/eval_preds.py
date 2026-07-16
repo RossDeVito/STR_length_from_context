@@ -202,7 +202,7 @@ if __name__ == "__main__":
 	# ------------------------------------------------------------------
 	# Config
 	# ------------------------------------------------------------------
-	str_len = 4                 # which STR length to evaluate (1 or 2)
+	str_len = 3                 # which STR length to evaluate (1 or 2)
 	plot_metric = "Spearman_r"  # metric used to pick the "best" baseline/model
 
 	caduceus_pred_dir = f"predictions/caduceus/caduceus_v0/str{str_len}"
