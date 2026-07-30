@@ -36,6 +36,11 @@ Config keys:
 	internal_batch_size (int): Captum internal batch size for interpolation
 		steps. Defaults to `batch_size`.
 	method (str): Captum IG integration method. Default "gausslegendre".
+	subsample_loci (int, optional): If set, deterministically restrict the
+		split to this many unique loci (both fwd/RC orientations kept per
+		locus, via region_permutation_importance.subsample_dataset) -- for
+		fast, reproducible method/n_steps comparison runs.
+	seed (int): Random seed for `subsample_loci`. Default 42.
 
 Outputs (written to {output_dir}/{desc}/):
 	config.yaml
@@ -83,7 +88,8 @@ Outputs (written to {output_dir}/{desc}/):
 		"transforms": {task: transform_name}, "targets": {task: source_col},
 		"sequence_layout": {n_prefix_prompt, n_flanking_bp, n_str_bp,
 		n_str_prompt, n_suffix_prompt, seq_len, "order": [7 segment names]},
-		"ig_config": {n_steps, internal_batch_size, method, baseline},
+		"ig_config": {n_steps, internal_batch_size, method, baseline,
+		subsample_loci, seed},
 		"n_samples", "device", "timestamp"}.
 """
 
@@ -103,6 +109,7 @@ from tqdm import tqdm
 from seq_models.caduceus.model import inverse_transform
 from seq_models.caduceus.region_permutation_importance import (
 	load_model_and_data,
+	subsample_dataset,
 )
 
 
@@ -334,6 +341,11 @@ def main():
 	targets = model.targets
 	print(f"Active targets: {task_names}")
 	print(f"Transforms: {dict(transforms)}")
+
+	subsample_loci = config.get("subsample_loci", None)
+	seed = config.get("seed", 42)
+	if subsample_loci is not None:
+		dataset = subsample_dataset(dataset, int(subsample_loci), seed)
 
 	tokenizer = dataset.tokenizer
 
@@ -628,6 +640,8 @@ def main():
 			"internal_batch_size": internal_batch_size,
 			"method": ig_method,
 			"baseline": "mean_ACGT_embedding (flanking only)",
+			"subsample_loci": subsample_loci,
+			"seed": seed,
 		},
 		"n_samples": n_samples,
 		"device": str(device),
