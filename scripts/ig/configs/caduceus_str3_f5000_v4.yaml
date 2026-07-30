@@ -1,0 +1,13 @@
+# --- Model (dir relative to scripts/training/output/caduceus/) ---
+model_dir: "caduceus_v0/str3/str3_f5000_fiv_v4_2026-07-06_16-11-21"
+desc: "caduceus_v0/str3/str3_f5000_fiv_v4"
+
+# --- Data loading ---
+split: "test"
+batch_size: 16
+num_workers: 8
+
+# --- Integrated Gradients ---
+n_steps: 300
+internal_batch_size: 32
+method: "gausslegendre"

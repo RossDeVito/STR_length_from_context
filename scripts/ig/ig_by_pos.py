@@ -29,7 +29,12 @@ from tqdm import trange
 # Configuration
 # ============================================================================
 
-ATTR_DIR = "output/str2/v1/2000_p128_300steps_rt"
+ATTR_DIR = "output/caduceus_v0/str3/str3_f5000_fiv_v4"
+
+# Which task's attributions/predictions to plot (must be one of the
+# checkpoint's active targets, e.g. "length" or "variation" -- see
+# {ATTR_DIR}/meta.json "task_names").
+TASK = "length"
 
 # Confidence interval level (0-1), e.g. 0.95 for 95% CI
 CI_LEVEL = 0.95
@@ -67,11 +72,11 @@ with open(os.path.join(ATTR_DIR, "meta.json"), "r") as f:
 
 layout = meta["sequence_layout"]
 
-attributions = data["attributions"]
-raw_predictions = data["raw_predictions"]
-raw_baseline_predictions = data["raw_baseline_predictions"]
-relative_deltas = data["relative_convergence_deltas"]
-labels = data["labels"]
+attributions = data[f"attributions_{TASK}"]
+raw_predictions = data[f"raw_predictions_{TASK}"]
+raw_baseline_predictions = data[f"raw_baseline_predictions_{TASK}"]
+relative_deltas = data[f"relative_convergence_deltas_{TASK}"]
+labels = data[f"labels_{TASK}"]
 rev_comp = data["rev_comp"]  # boolean: True for reverse complement samples
 
 n_samples, seq_len = attributions.shape
@@ -86,6 +91,9 @@ n_left_str = layout["n_str_bp"]
 n_str_prompt_region = layout["n_str_prompt"]
 n_right_str = layout["n_str_bp"]
 n_right_flank = layout["n_flanking_bp"]
+# A trailing suffix_prompt block (if any) sits after right_flank and is never
+# indexed below, so it doesn't affect any of the region-boundary math here.
+n_suffix_prompt = layout.get("n_suffix_prompt", 0)
 
 lf_start = n_prefix
 lf_end = n_prefix + n_left_flank
@@ -448,7 +456,7 @@ fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(FIG_WIDTH, FIG_HEIGHT * 2),
 
 plot_attribution_panel(
 	ax1, all_mean, all_ci_lo, all_ci_hi,
-	f"All samples IG attribution magnitude ({n_kept} samples, "
+	f"[{TASK}] All samples IG attribution magnitude ({n_kept} samples, "
 	f"{int(CI_LEVEL*100)}% CI)\n"
 	f"pred_diff_threshold={PRED_DIFF_THRESHOLD}, "
 	f"rel_delta_threshold={REL_DELTA_THRESHOLD}"
@@ -456,7 +464,7 @@ plot_attribution_panel(
 
 plot_attribution_panel(
 	ax2, avg_mean, avg_ci_lo, avg_ci_hi,
-	f"Forward + RC averaged IG attribution magnitude ({n_paired_kept} loci, "
+	f"[{TASK}] Forward + RC averaged IG attribution magnitude ({n_paired_kept} loci, "
 	f"{int(CI_LEVEL*100)}% CI)\n"
 	f"pred_diff_threshold={PRED_DIFF_THRESHOLD}, "
 	f"rel_delta_threshold={REL_DELTA_THRESHOLD}"

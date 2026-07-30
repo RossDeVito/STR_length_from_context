@@ -15,7 +15,7 @@ fi
 CONFIG_FILE="$1"
 
 # Print what is running for verification
-echo "Running soft prompt training with config: $CONFIG_FILE"
+echo "Running Caduceus integrated gradients with config: $CONFIG_FILE"
 
 # Confirm the config file exists
 if [ ! -f "${CONFIG_DIR}/${CONFIG_FILE}" ]; then
@@ -24,6 +24,6 @@ if [ ! -f "${CONFIG_DIR}/${CONFIG_FILE}" ]; then
 fi
 
 # Run the command
-python -m seq_models.hyenaDNA.integrated_gradients \
+python -m seq_models.caduceus.integrated_gradients \
     --config "${CONFIG_DIR}/${CONFIG_FILE}" \
     --output_dir "${OUTPUT_DIR}"

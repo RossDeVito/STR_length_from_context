@@ -1,8 +1,8 @@
 """Find good candidate loci for single-example IG attribution visualization.
 
 Loads IG attribution results, pairs forward and reverse complement samples
-by HipSTR_name, and ranks loci by a composite score combining:
-  1. Prediction accuracy  — |prediction - label| in copy-number space (lower is better)
+by locus id, and ranks loci by a composite score combining:
+  1. Prediction accuracy  — |prediction - label| in native units (lower is better)
   2. Convergence delta    — relative convergence delta (lower is better)
   3. Prediction difference — |F(input) - F(baseline)| (higher is better;
                              indicates informative flanking sequence)
@@ -13,14 +13,30 @@ be visualized.
 """
 
 import numpy as np
+import torch
 import json
 import os
+
+from seq_models.caduceus.model import inverse_transform
+
+
+def to_native_array(transform_name, values):
+	"""Apply a model target's inverse transform to an array of raw values."""
+	return inverse_transform(
+		transform_name, torch.tensor(values, dtype=torch.float32)
+	).numpy()
+
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-ATTR_DIR = "output/str2/v1/2000_p128_300steps_rt"
+ATTR_DIR = "output/caduceus_v0/str3/str3_f5000_fiv_v4"
+
+# Which task's predictions/deltas to rank on (must be one of the checkpoint's
+# active targets, e.g. "length" or "variation" -- see {ATTR_DIR}/meta.json
+# "task_names").
+TASK = "length"
 
 # Hard filters: loci failing these are excluded entirely.
 # Set to None to disable a filter.
@@ -48,12 +64,14 @@ data = np.load(os.path.join(ATTR_DIR, "attributions.npz"), allow_pickle=True)
 with open(os.path.join(ATTR_DIR, "meta.json"), "r") as f:
 	meta = json.load(f)
 
-raw_predictions = data["raw_predictions"]
-raw_baseline_predictions = data["raw_baseline_predictions"]
-relative_deltas = data["relative_convergence_deltas"]
-labels = data["labels"]
+transform_name = meta["transforms"][TASK]
+
+raw_predictions = data[f"raw_predictions_{TASK}"]
+raw_baseline_predictions = data[f"raw_baseline_predictions_{TASK}"]
+relative_deltas = data[f"relative_convergence_deltas_{TASK}"]
+labels = data[f"labels_{TASK}"]
 rev_comp = data["rev_comp"]
-hipstr_names = data["hipstr_names"]
+ids = data["ids"]
 
 n_samples = len(labels)
 
@@ -61,28 +79,29 @@ n_samples = len(labels)
 # Per-sample metrics
 # ============================================================================
 
-# Labels are in copy-number space; predictions are in log1p space.
-# Compute error in copy-number space.
-pred_errors = np.abs(np.expm1(raw_predictions) - labels)
+# Labels are in native units; predictions are in the task's training space
+# (transform_name, e.g. log1p or arcsin_sqrt). Compute error in native units.
+pred_errors = np.abs(to_native_array(transform_name, raw_predictions) - labels)
 
 raw_pred_diffs = raw_predictions - raw_baseline_predictions
 abs_pred_diffs = np.abs(raw_pred_diffs)
 
+print(f"Task: {TASK} (transform: {transform_name})")
 print(f"Loaded {n_samples} samples")
 print(f"  Forward: {np.sum(~rev_comp)}, RC: {np.sum(rev_comp)}")
-print(f"  Unique loci: {len(np.unique(hipstr_names))}")
+print(f"  Unique loci: {len(np.unique(ids))}")
 
 # ============================================================================
 # Group by locus: pair forward and RC
 # ============================================================================
 
-unique_names = np.unique(hipstr_names)
-n_loci = len(unique_names)
+unique_ids = np.unique(ids)
+n_loci = len(unique_ids)
 
-# Build lookup: hipstr_name -> {fwd_idx, rc_idx}
+# Build lookup: id -> {fwd_idx, rc_idx}
 locus_pairs = {}
 for i in range(n_samples):
-	name = str(hipstr_names[i])
+	name = str(ids[i])
 	if name not in locus_pairs:
 		locus_pairs[name] = {"fwd": None, "rc": None}
 	if rev_comp[i]:
@@ -219,7 +238,7 @@ print(f"Top {n_show} candidate loci (weights: error={w_err:.2f}, "
       f"delta={w_delta:.2f}, diff={w_diff:.2f})")
 print(f"{'='*100}")
 
-header = (f"{'Rank':>4}  {'Score':>5}  {'HipSTR Name':<30}  "
+header = (f"{'Rank':>4}  {'Score':>5}  {'Locus ID':<30}  "
           f"{'Label':>7}  {'PredErr':>8}  {'RelDelta':>9}  {'PredDiff':>9}  "
           f"{'FwdIdx':>6}  {'RcIdx':>6}")
 print(header)

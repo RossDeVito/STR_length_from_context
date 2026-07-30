@@ -1,26 +1,35 @@
 import numpy as np
 
+ATTR_DIR = "output/caduceus_v0/str3/str3_f5000_fiv_v4"
+
+# Which task's attributions/predictions to inspect (must be one of the
+# checkpoint's active targets, e.g. "length" or "variation" -- see
+# {ATTR_DIR}/meta.json "task_names").
+TASK = "length"
+
 data = np.load(
-	"output/str2/dev/2000_dev_1000steps_rt/attributions.npz",
+	f"{ATTR_DIR}/attributions.npz",
 	allow_pickle=True
 )
 
-# Access arrays by key
-attributions = data["attributions"]                          # (n_samples, seq_len)
-input_ids = data["input_ids"]                                # (n_samples, seq_len)
-sequences = data["sequences"]                                # (n_samples,) strings
-predictions = data["predictions"]                            # (n_samples,)
-baseline_predictions = data["baseline_predictions"]          # (n_samples,)
-raw_predictions = data["raw_predictions"]                    # (n_samples,)
-raw_baseline_predictions = data["raw_baseline_predictions"]  # (n_samples,)
-labels = data["labels"]                                      # (n_samples,)
-convergence_deltas = data["convergence_deltas"]              # (n_samples,)
-relative_deltas = data["relative_convergence_deltas"]        # (n_samples,)
-position_labels = data["position_labels"]                    # (seq_len,) strings
-hipstr_names = data["hipstr_names"]                          # (n_samples,) strings
-rev_comp = data["rev_comp"]                                  # (n_samples,) bools
+# Access arrays by key. Shared arrays (one row per sample, i.e. per fwd/RC
+# orientation); per-task arrays are suffixed "_{TASK}".
+attributions = data[f"attributions_{TASK}"]                          # (n_samples, seq_len)
+input_ids = data["input_ids"]                                        # (n_samples, seq_len)
+sequences = data["sequences"]                                        # (n_samples,) strings
+predictions = data[f"predictions_{TASK}"]                            # (n_samples,)
+baseline_predictions = data[f"baseline_predictions_{TASK}"]          # (n_samples,)
+raw_predictions = data[f"raw_predictions_{TASK}"]                    # (n_samples,)
+raw_baseline_predictions = data[f"raw_baseline_predictions_{TASK}"]  # (n_samples,)
+labels = data[f"labels_{TASK}"]                                      # (n_samples,)
+convergence_deltas = data[f"convergence_deltas_{TASK}"]              # (n_samples,)
+relative_deltas = data[f"relative_convergence_deltas_{TASK}"]        # (n_samples,)
+position_labels = data["position_labels"]                            # (seq_len,) strings
+ids = data["ids"]                                                    # (n_samples,) strings
+rev_comp = data["rev_comp"]                                          # (n_samples,) bools
 
-# Raw prediction difference (in model output space, log space if log_transform)
+# Raw prediction difference, in the task's training-space (e.g. log1p space
+# for a log1p-transformed target; see {ATTR_DIR}/meta.json "transforms").
 raw_pred_diffs = np.abs(raw_predictions - raw_baseline_predictions)
 abs_deltas = np.abs(convergence_deltas)
 
@@ -28,19 +37,19 @@ abs_deltas = np.abs(convergence_deltas)
 # Per-sample detail
 # ---------------------------------------------------------------------------
 # print("Per-sample breakdown:")
-# print(f"{'idx':>4}  {'hipstr_name':>20}  {'raw_pred_diff':>13}  "
+# print(f"{'idx':>4}  {'id':>20}  {'raw_pred_diff':>13}  "
 #       f"{'abs_delta':>10}  {'rel_delta':>10}  {'label':>6}")
 # print("-" * 80)
 
 # for i in range(len(convergence_deltas)):
-# 	print(f"{i:4d}  {str(hipstr_names[i]):>20}  {raw_pred_diffs[i]:13.4f}  "
+# 	print(f"{i:4d}  {str(ids[i]):>20}  {raw_pred_diffs[i]:13.4f}  "
 # 	      f"{abs_deltas[i]:10.4f}  {relative_deltas[i]:10.4f}  "
 # 	      f"{labels[i]:6.1f}")
 
 # ---------------------------------------------------------------------------
 # Filter: samples where flanking sequence actually affects prediction
 # ---------------------------------------------------------------------------
-threshold = 0.05  # in raw (log) space
+threshold = 0.05  # in raw (training-space) space
 informative = raw_pred_diffs > threshold
 uninformative = ~informative
 
@@ -48,6 +57,7 @@ n_informative = np.sum(informative)
 n_uninformative = np.sum(uninformative)
 
 print(f"\n{'='*80}")
+print(f"Task: {TASK}")
 print(f"Filtering with raw_pred_diff threshold = {threshold}")
 print(f"  Informative (flanking matters):       {n_informative} / {len(labels)}")
 print(f"  Uninformative (flanking ~no effect):  {n_uninformative} / {len(labels)}")

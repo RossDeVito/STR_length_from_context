@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ig_a100
+#SBATCH --job-name=caduceus_ig
 #SBATCH --partition=hotel-gpu
 #SBATCH --qos=hotel-gpu
 #SBATCH --account=htl149
@@ -9,8 +9,8 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --mem=50G
 #SBATCH --time=48:00:00
-#SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/ig_a100_%j.out
-#SBATCH --error=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/ig_a100_%j.err
+#SBATCH --output=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/caduceus_ig_%j.out
+#SBATCH --error=/tscc/projects/ps-gymreklab/rdevito/str_len_pred/slurm_logs/caduceus_ig_%j.err
 
 # Argument Parsing
 CONFIG_NAME=$1
@@ -31,7 +31,7 @@ cd "$PROJECT_ROOT" || exit 1
 
 # Activate Environment
 source ~/.bashrc
-conda activate str_len_pred_gpu
+conda activate str_pred_caduceus
 
 # Run wrapper script
 ./scripts/ig/run_ig.sh "$CONFIG_NAME"

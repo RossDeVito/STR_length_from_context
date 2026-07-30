@@ -18,10 +18,18 @@ actual genomic base at that position.
 
 import numpy as np
 import pandas as pd
+import torch
 import matplotlib.pyplot as plt
 import logomaker
 import json
 import os
+
+from seq_models.caduceus.model import inverse_transform
+
+
+def to_native(transform_name, value):
+	"""Apply a model target's inverse transform to a raw scalar."""
+	return float(inverse_transform(transform_name, torch.tensor(float(value))))
 
 
 # ============================================================================
@@ -66,10 +74,14 @@ if __name__ == "__main__":
 	# Configuration
 	# ====================================================================
 
-	ATTR_DIR = "output/str2/v1/2000_p128_300steps_rt"
-	# HIPSTR_NAME = "Human_STR_420999"
-	# HIPSTR_NAME = "Human_STR_408234"
-	HIPSTR_NAME = "Human_STR_422778"
+	ATTR_DIR = "output/caduceus_v0/str3/str3_f5000_fiv_v4"
+
+	# Which task's attributions/predictions to plot (must be one of the
+	# checkpoint's active targets, e.g. "length" or "variation" -- see
+	# {ATTR_DIR}/meta.json "task_names").
+	TASK = "length"
+
+	LOCUS_ID = "Human_STR_422778"
 	MAX_DIST = 200  # max bp from STR to include in each direction
 
 	# Figure
@@ -88,13 +100,14 @@ if __name__ == "__main__":
 		meta = json.load(f)
 
 	layout = meta["sequence_layout"]
+	transform_name = meta["transforms"][TASK]
 
-	attributions = data["attributions"]
-	raw_predictions = data["raw_predictions"]
-	raw_baseline_predictions = data["raw_baseline_predictions"]
-	labels = data["labels"]
+	attributions = data[f"attributions_{TASK}"]
+	raw_predictions = data[f"raw_predictions_{TASK}"]
+	raw_baseline_predictions = data[f"raw_baseline_predictions_{TASK}"]
+	labels = data[f"labels_{TASK}"]
 	rev_comp = data["rev_comp"]
-	hipstr_names = data["hipstr_names"]
+	ids = data["ids"]
 	sequences = data["sequences"]
 
 	# ====================================================================
@@ -120,15 +133,15 @@ if __name__ == "__main__":
 	fwd_idx = None
 	rc_idx = None
 
-	for i in range(len(hipstr_names)):
-		if str(hipstr_names[i]) == HIPSTR_NAME:
+	for i in range(len(ids)):
+		if str(ids[i]) == LOCUS_ID:
 			if rev_comp[i]:
 				rc_idx = i
 			else:
 				fwd_idx = i
 
-	assert fwd_idx is not None, f"No forward sample found for {HIPSTR_NAME}"
-	assert rc_idx is not None, f"No RC sample found for {HIPSTR_NAME}"
+	assert fwd_idx is not None, f"No forward sample found for {LOCUS_ID}"
+	assert rc_idx is not None, f"No RC sample found for {LOCUS_ID}"
 
 	# ====================================================================
 	# Normalize attributions (signed, divide by pred_diff)
@@ -211,8 +224,8 @@ if __name__ == "__main__":
 	# ====================================================================
 
 	true_cn = float(labels[fwd_idx])
-	fwd_pred_cn = float(np.expm1(raw_predictions[fwd_idx]))
-	rc_pred_cn = float(np.expm1(raw_predictions[rc_idx]))
+	fwd_pred_cn = to_native(transform_name, raw_predictions[fwd_idx])
+	rc_pred_cn = to_native(transform_name, raw_predictions[rc_idx])
 
 	fwd_pred_diff_val = float(fwd_pred_diff)
 	rc_pred_diff_val = float(rc_pred_diff)
@@ -228,13 +241,13 @@ if __name__ == "__main__":
 	else:
 		repeat_unit = str_left_clean[:1]
 
-	print(f"Locus: {HIPSTR_NAME}")
+	print(f"Locus: {LOCUS_ID}  (task: {TASK}, transform: {transform_name})")
 	print(f"  Repeat unit: {repeat_unit}")
-	print(f"  True CN:    {true_cn:.1f}")
-	print(f"  Fwd pred:   {fwd_pred_cn:.2f} CN  "
-	      f"(log1p pred_diff: {fwd_pred_diff_val:.4f})")
-	print(f"  RC  pred:   {rc_pred_cn:.2f} CN  "
-	      f"(log1p pred_diff: {rc_pred_diff_val:.4f})")
+	print(f"  True:       {true_cn:.4g}")
+	print(f"  Fwd pred:   {fwd_pred_cn:.4g}  "
+	      f"({transform_name} pred_diff: {fwd_pred_diff_val:.4f})")
+	print(f"  RC  pred:   {rc_pred_cn:.4g}  "
+	      f"({transform_name} pred_diff: {rc_pred_diff_val:.4f})")
 	print(f"  Plotting ±{dist} bp from STR")
 
 	# ====================================================================
@@ -248,8 +261,8 @@ if __name__ == "__main__":
 	)
 
 	subplot_info = [
-		(fwd_df, f"Forward strand  (pred: {fwd_pred_cn:.1f} CN)"),
-		(rc_df, f"RC aligned to genomic  (pred: {rc_pred_cn:.1f} CN)"),
+		(fwd_df, f"Forward strand  (pred: {fwd_pred_cn:.4g})"),
+		(rc_df, f"RC aligned to genomic  (pred: {rc_pred_cn:.4g})"),
 		(mean_df, f"Mean (forward + RC aligned)"),
 	]
 
@@ -284,9 +297,9 @@ if __name__ == "__main__":
 	axes[-1].set_xlabel("Position relative to STR (bp)")
 
 	fig.suptitle(
-		f"{HIPSTR_NAME}    |    STR: [{repeat_unit}]{true_cn:.4g}"
-		f"    |    Fwd pred: {fwd_pred_cn:.1f}"
-		f"    |    RC pred: {rc_pred_cn:.1f}",
+		f"{LOCUS_ID}  [{TASK}]    |    STR: [{repeat_unit}]{true_cn:.4g}"
+		f"    |    Fwd pred: {fwd_pred_cn:.4g}"
+		f"    |    RC pred: {rc_pred_cn:.4g}",
 		fontsize=13, fontweight="bold",
 	)
 
