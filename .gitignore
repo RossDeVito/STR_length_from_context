@@ -15,6 +15,12 @@ tscc_cmds.md
 **/STR_data/**/*.txt
 !**/STR_data/**/str_len_2_dev.tsv
 
+# Annotation data files
+data/annotations/**
+!data/annotations/**/
+!data/annotations/**/*.sh
+
+
 # Invalid regions
 **/data/invalid_regions/**.bed.gz
 

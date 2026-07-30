@@ -1,10 +1,13 @@
 """ Train and evaluate a linear baseline model for STR length/variation.
 
-Fits a ridge regression on k-mer count features extracted from flanking
-sequences (optionally stratified by flank side and/or distance from the STR),
-selects the regularization strength (alpha) per target using the validation
-split, and saves test-set predictions in the same per-locus format as the
-Caduceus predict script.
+Fits a ridge regression on features extracted from flanking sequences
+(optionally stratified by flank side and/or distance from the STR), selects
+the regularization strength (alpha) per target using the validation split,
+and saves test-set predictions in the same per-locus format as the Caduceus
+predict script. Two feature families are supported (`feature_type`): k-mer
+counts (`seq_models.linear.data.create_kmer_data`) or GC-content fractions
+(`seq_models.linear.data.create_gc_data`) -- both plug into the same
+training/output pipeline below.
 
 The targets follow the Caduceus standard (multi-objective): `length`
 (mode_copy_number, trained in log1p space) and `variation` (heterozygosity,
@@ -24,11 +27,15 @@ Required config keys:
 	n_flanking_bp (int): Number of flanking base pairs per side.
 
 Optional config keys:
-	k_values (list[int]): K-mer sizes to count. Default: [3, 4, 5].
-	flank_mode (str): "separate" (left/right distinct) or "pooled" (summed).
-		Default: "separate".
-	distance_bins (list[int]): Upper edges (bp from STR) for distance
-		stratification. Default: None (single whole-flank bin).
+	feature_type (str): "kmer" (k-mer counts) or "gc" (GC-content fractions).
+		Default: "kmer".
+	k_values (list[int]): K-mer sizes to count. Only used when
+		feature_type == "kmer". Default: [3, 4, 5].
+	flank_mode (str): "separate" (left/right distinct) or "pooled" (summed
+		for kmer, combined for gc). Default: "separate".
+	distance_bins (int | list[int]): Distance-from-STR stratification -- an
+		int means uniform-width bins of that size (bp); a list means explicit
+		bp upper-edges. Default: None (single whole-flank bin).
 	targets (dict): output_name -> source column. Default: both length and
 		variation. Provide a subset for single-objective runs.
 	alphas (list[float]): Ridge alpha values to search over on the validation
@@ -47,7 +54,7 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from seq_models.linear.data import create_kmer_data
+from seq_models.linear.data import create_kmer_data, create_gc_data
 
 
 # Targets and training-space transforms, mirroring DEFAULT_TARGETS /
@@ -105,8 +112,10 @@ def fit_target(X_train, X_val, X_test, y_raw, transform_name, alphas, seed):
 		seed: random seed.
 
 	Returns:
-		(test_pred_native, info) where test_pred_native is the native-space
-		prediction array and info is a dict of alpha-search results.
+		(test_pred_native, info, coef) where test_pred_native is the
+		native-space prediction array, info is a dict of alpha-search results
+		(including the final refit model's intercept), and coef is the final
+		refit model's Ridge coefficients (standardized-feature space).
 	"""
 	fwd, inv = TARGET_TRANSFORMS[transform_name]
 	y_train = fwd(np.asarray(y_raw["train"], dtype=np.float64))
@@ -137,8 +146,9 @@ def fit_target(X_train, X_val, X_test, y_raw, transform_name, alphas, seed):
 		"best_alpha": best_alpha,
 		"best_val_mse": best_val_mse,
 		"alpha_search": val_results,
+		"intercept": float(model.intercept_),
 	}
-	return test_pred_native, info
+	return test_pred_native, info, model.coef_
 
 
 if __name__ == "__main__":
@@ -154,7 +164,7 @@ if __name__ == "__main__":
 		config = yaml.safe_load(f)
 
 	n_flanking_bp = config["n_flanking_bp"]
-	k_values = config.get("k_values", [3, 4, 5])
+	feature_type = config.get("feature_type", "kmer")  # "kmer" | "gc"
 	flank_mode = config.get("flank_mode", "separate")
 	distance_bins = config.get("distance_bins", None)
 	targets = config.get("targets", DEFAULT_TARGETS)
@@ -180,17 +190,31 @@ if __name__ == "__main__":
 		yaml.dump(config, f)
 
 	# ------------------------------------------------------------------
-	# Build k-mer dataset
+	# Build feature dataset
 	# ------------------------------------------------------------------
 
-	splits, feature_names = create_kmer_data(
-		data_path=config["data_path"],
-		ref_path=config["ref_path"],
-		n_flanking_bp=n_flanking_bp,
-		k_values=k_values,
-		flank_mode=flank_mode,
-		distance_bins=distance_bins,
-	)
+	if feature_type == "kmer":
+		k_values = config.get("k_values", [3, 4, 5])
+		splits, feature_names = create_kmer_data(
+			data_path=config["data_path"],
+			ref_path=config["ref_path"],
+			n_flanking_bp=n_flanking_bp,
+			k_values=k_values,
+			flank_mode=flank_mode,
+			distance_bins=distance_bins,
+		)
+	elif feature_type == "gc":
+		splits, feature_names = create_gc_data(
+			data_path=config["data_path"],
+			ref_path=config["ref_path"],
+			n_flanking_bp=n_flanking_bp,
+			distance_bins=distance_bins,
+			flank_mode=flank_mode,
+		)
+	else:
+		raise ValueError(
+			f"Unknown feature_type: {feature_type!r} (expected 'kmer' or 'gc')"
+		)
 
 	X_train = splits["train"]["X"]
 	X_val = splits["val"]["X"]
@@ -220,10 +244,11 @@ if __name__ == "__main__":
 
 	target_info = {}
 	test_preds = {}  # out_name -> native-space prediction array
+	target_coefs = {}  # out_name -> standardized-feature-space Ridge coef_
 	for out_name, col in targets.items():
 		print(f"\n=== Target '{out_name}' (column '{col}', "
 			  f"transform '{transforms[out_name]}') ===")
-		pred_native, info = fit_target(
+		pred_native, info, coef = fit_target(
 			X_train, X_val, X_test,
 			y_raw={
 				"train": train_meta[col].values,
@@ -236,6 +261,7 @@ if __name__ == "__main__":
 		test_preds[out_name] = pred_native
 		info["source_column"] = col
 		target_info[out_name] = info
+		target_coefs[out_name] = coef
 
 	# ------------------------------------------------------------------
 	# Assemble per-orientation table, then RC-average per locus
@@ -280,12 +306,24 @@ if __name__ == "__main__":
 	print(f"Saved {len(per_locus)} per-locus (RC-averaged) rows to {pred_path}")
 
 	# ------------------------------------------------------------------
+	# Save per-feature Ridge coefficients (standardized-feature space)
+	# ------------------------------------------------------------------
+
+	coef_df = pd.DataFrame({"feature_name": feature_names})
+	for out_name in targets:
+		coef_df[out_name] = target_coefs[out_name]
+
+	coef_path = os.path.join(experiment_path, "coefficients.tsv")
+	coef_df.to_csv(coef_path, sep="\t", index=False)
+	print(f"Saved {len(coef_df)} feature coefficients to {coef_path}")
+
+	# ------------------------------------------------------------------
 	# Save run summary
 	# ------------------------------------------------------------------
 
 	summary = {
+		"feature_type": feature_type,
 		"n_flanking_bp": n_flanking_bp,
-		"k_values": k_values,
 		"flank_mode": flank_mode,
 		"distance_bins": distance_bins,
 		"n_features": len(feature_names),
@@ -295,6 +333,8 @@ if __name__ == "__main__":
 		"n_test_loci": int(len(per_locus)),
 		"targets": target_info,
 	}
+	if feature_type == "kmer":
+		summary["k_values"] = k_values
 
 	summary_path = os.path.join(experiment_path, "summary.json")
 	with open(summary_path, "w") as f:

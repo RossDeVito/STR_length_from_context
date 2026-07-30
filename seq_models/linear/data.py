@@ -1,5 +1,5 @@
-""" Handles loading STR data and converting to k-mer count representations
-for linear models.
+""" Handles loading STR data and converting to feature representations for
+linear models.
 
 Requires a TSV file (the Caduceus standard) with columns:
 - ID: Locus identifier (used to pair reverse-complement samples downstream)
@@ -24,6 +24,12 @@ samples, and every sample (k-mers and motif) reflects its own strand, mirroring
 the Caduceus pipeline; the two per-locus predictions are averaged downstream.
 K-mer counts can optionally be stratified by flank side and/or by distance from
 the STR.
+
+Function create_gc_data() creates an alternative, much lower-dimensional
+feature representation for the same STRs and reference genome: instead of
+k-mer counts, each flank is stratified into the same (side, distance-bin)
+groups and each group's feature is its GC-content fraction, with the STR
+motif one-hot encoded identically to create_kmer_data().
 """
 
 import numpy as np
@@ -94,6 +100,17 @@ def count_kmers(seq, k):
 	return counts
 
 
+def gc_fraction(seq, default=0.0):
+	"""Fraction of G/C among valid (non-N) bases in *seq*.
+
+	Returns `default` if *seq* has no valid ACGT bases (e.g. an all-N block).
+	"""
+	n_valid = sum(seq.count(b) for b in _VALID_BASES)
+	if n_valid == 0:
+		return default
+	return (seq.count("G") + seq.count("C")) / n_valid
+
+
 def infer_motif_len(str_df):
 	"""Infer the repeat-unit length from the first row of a STR DataFrame.
 
@@ -113,12 +130,31 @@ def infer_motif_len(str_df):
 def build_distance_edges(distance_bins, n_flanking_bp):
 	"""Return bin edges [0, e1, ..., n_flanking_bp] from a distance_bins config.
 
-	`distance_bins` is a list of upper edges (bp from the STR). None means a
-	single bin spanning the whole flank. The final edge n_flanking_bp is
-	appended automatically if not already present.
+	`distance_bins` may be:
+		- None: a single bin spanning the whole flank.
+		- int: uniform-width bins of that size (bp), indexed outward from the
+		  STR; if n_flanking_bp is not evenly divisible, a smaller remainder
+		  bin is kept (not dropped/merged) at the far (non-STR) end.
+		- list: explicit upper edges (bp from the STR). The final edge
+		  n_flanking_bp is appended automatically if not already present.
 	"""
 	if not distance_bins:
 		return [0, n_flanking_bp]
+
+	if isinstance(distance_bins, int):
+		if distance_bins <= 0:
+			raise ValueError(f"distance_bins (int) must be positive, got {distance_bins}")
+		if distance_bins > n_flanking_bp:
+			raise ValueError(
+				f"distance_bins ({distance_bins}) must be <= n_flanking_bp "
+				f"({n_flanking_bp})"
+			)
+		n_full = n_flanking_bp // distance_bins
+		remainder = n_flanking_bp % distance_bins
+		edges = [i * distance_bins for i in range(n_full + 1)]
+		if remainder > 0:
+			edges.append(n_flanking_bp)  # smaller remainder bin at the far end
+		return edges
 
 	edges = [int(e) for e in distance_bins]
 	if any(b <= a for a, b in zip(edges, edges[1:])):
@@ -132,8 +168,57 @@ def build_distance_edges(distance_bins, n_flanking_bp):
 	return [0] + edges
 
 
+def extract_flank_sequences(ref_genome, row, n_flanking_bp):
+	"""Extract this sample's left/right flank sequences, on its own strand.
+
+	Reverse complement: swap flanks and complement (same convention as the
+	HyenaDNA/Caduceus pipelines). After this, the STR-adjacent base is at the
+	end of left_seq and the start of right_seq for both orientations.
+	"""
+	chrom = row["chrom"]
+	start = int(row["str_start"])
+	end = int(row["str_end"])
+
+	left_seq_obj = ref_genome[chrom][start - n_flanking_bp : start]
+	right_seq_obj = ref_genome[chrom][end : end + n_flanking_bp]
+
+	if row["rev_comp"]:
+		return (
+			right_seq_obj.reverse.complement.seq,
+			left_seq_obj.reverse.complement.seq,
+		)
+	return left_seq_obj.seq, right_seq_obj.seq
+
+
+def build_motif_vocab(motif_len):
+	"""Return (canonical_motifs, motif_to_idx) for a given repeat-unit length.
+
+	Restricted to primitive units (period == motif_len) so str2 yields
+	{AC,AG,AT,CG,CT,GT} (no homopolymers) and str1 yields {A,C,G,T}.
+	"""
+	canonical_motifs = sorted(set(
+		rotation_canonicalize(km) for km in all_kmers(motif_len) if is_primitive(km)
+	))
+	motif_to_idx = {m: i for i, m in enumerate(canonical_motifs)}
+	return canonical_motifs, motif_to_idx
+
+
+def sample_motif_canonical(ref_genome, row, motif_len):
+	"""Return this sample's STR motif, canonicalized on its own strand.
+
+	Takes the forward-strand repeat unit and reverse-complements it for
+	rev_comp samples, then rotation-canonicalizes (phase-invariant).
+	"""
+	chrom = row["chrom"]
+	start = int(row["str_start"])
+	motif_bases = ref_genome[chrom][start : start + motif_len].seq
+	if row["rev_comp"]:
+		motif_bases = reverse_complement(motif_bases)
+	return rotation_canonicalize(motif_bases)
+
+
 # -----------------------------------------------------------------------
-# Main entry point
+# Main entry points
 # -----------------------------------------------------------------------
 
 def create_kmer_data(
@@ -230,12 +315,7 @@ def create_kmer_data(
 				offset += 4 ** k
 
 	# Motif one-hot features (rotation-only canonical set; strand preserved).
-	# Restrict to primitive units so str2 yields {AC,AG,AT,CG,CT,GT} (no
-	# homopolymers) and str1 yields {A,C,G,T}.
-	canonical_motifs = sorted(set(
-		rotation_canonicalize(km) for km in all_kmers(motif_len) if is_primitive(km)
-	))
-	motif_to_idx = {m: i for i, m in enumerate(canonical_motifs)}
+	canonical_motifs, motif_to_idx = build_motif_vocab(motif_len)
 	motif_feature_offset = len(feature_names)
 	for m in canonical_motifs:
 		feature_names.append(f"motif_{m}")
@@ -262,23 +342,7 @@ def create_kmer_data(
 
 	for i in tqdm(range(n_samples), desc="Counting k-mers"):
 		row = str_df.iloc[i]
-		chrom = row["chrom"]
-		start = int(row["str_start"])
-		end = int(row["str_end"])
-
-		# Extract raw genomic flanks (pyfaidx Sequence objects)
-		left_seq_obj = ref_genome[chrom][start - n_flanking_bp : start]
-		right_seq_obj = ref_genome[chrom][end : end + n_flanking_bp]
-
-		# Reverse complement: swap flanks and complement (same convention as the
-		# HyenaDNA/Caduceus pipelines). After this, the STR-adjacent base is at
-		# the end of left_seq and the start of right_seq for both orientations.
-		if row["rev_comp"]:
-			left_seq = right_seq_obj.reverse.complement.seq
-			right_seq = left_seq_obj.reverse.complement.seq
-		else:
-			left_seq = left_seq_obj.seq
-			right_seq = right_seq_obj.seq
+		left_seq, right_seq = extract_flank_sequences(ref_genome, row, n_flanking_bp)
 
 		# Slice each flank into distance bins (measured from the STR) and count.
 		for b, (lo, hi) in enumerate(bins):
@@ -298,12 +362,140 @@ def create_kmer_data(
 					for kmer, cnt in pooled.items():
 						X[i, cmap[kmer]] = cnt
 
-		# Motif one-hot, on this sample's strand: take the forward-strand unit and
-		# reverse-complement it for rev_comp samples, then rotation-canonicalize.
-		motif_bases = ref_genome[chrom][start : start + motif_len].seq
-		if row["rev_comp"]:
-			motif_bases = reverse_complement(motif_bases)
-		canonical = rotation_canonicalize(motif_bases)
+		# Motif one-hot, on this sample's strand.
+		canonical = sample_motif_canonical(ref_genome, row, motif_len)
+		X[i, motif_feature_offset + motif_to_idx[canonical]] = 1.0
+
+	# ------------------------------------------------------------------
+	# Split into train / val / test
+	# ------------------------------------------------------------------
+
+	splits = {}
+	for split_name in ("train", "val", "test"):
+		mask = (str_df["split"] == split_name).values
+		n_split = mask.sum()
+		splits[split_name] = {
+			"X": X[mask],
+			"metadata": str_df.loc[mask].reset_index(drop=True),
+		}
+		print(f"  {split_name}: {n_split} samples")
+
+	return splits, feature_names
+
+
+def create_gc_data(
+	data_path,
+	ref_path,
+	n_flanking_bp,
+	distance_bins=None,
+	flank_mode="separate",
+):
+	"""Create GC-content dataset for linear baseline models.
+
+	An alternative, much lower-dimensional feature representation to
+	create_kmer_data(): instead of k-mer counts, each (side, distance bin)
+	group gets a single GC-fraction feature. Uses the identical sample
+	extraction, distance-bin slicing, and motif one-hot encoding as
+	create_kmer_data() -- see build_distance_edges() for how `distance_bins`
+	(None, an int for uniform-width bins, or an explicit list of edges)
+	determines the bins.
+
+	Flank handling (`flank_mode`):
+		- "separate": left and right bins are distinct feature groups.
+		- "pooled":   left and right bases in the same bin are concatenated
+			before computing one GC fraction (a length-weighted combination).
+
+	Features (in order):
+		- For each side, for each distance bin: 1 GC-fraction value.
+		- One-hot encoding of the canonical STR motif.
+
+	Args:
+		data_path: Path to TSV file with STR data.
+		ref_path: Path to reference genome FASTA file.
+		n_flanking_bp: Number of flanking base pairs on each side.
+		distance_bins: None, int, or list -- see build_distance_edges().
+		flank_mode: "separate" (left/right distinct) or "pooled" (combined).
+
+	Returns:
+		Tuple of (splits, feature_names), same shape as create_kmer_data().
+	"""
+
+	if flank_mode not in ("separate", "pooled"):
+		raise ValueError(f"flank_mode must be 'separate' or 'pooled', got {flank_mode!r}")
+
+	# ------------------------------------------------------------------
+	# Load data and reference genome
+	# ------------------------------------------------------------------
+
+	str_df = pd.read_csv(data_path, sep="\t")
+	ref_genome = Fasta(ref_path, sequence_always_upper=True)
+
+	motif_len = infer_motif_len(str_df)
+
+	# Distance bins and the side labels we materialize.
+	edges = build_distance_edges(distance_bins, n_flanking_bp)
+	bins = list(zip(edges, edges[1:]))  # [(lo, hi), ...]
+	n_bins = len(bins)
+	sides = ["left", "right"] if flank_mode == "separate" else ["flank"]
+	multi_bin = n_bins > 1
+
+	# ------------------------------------------------------------------
+	# Build feature schema and (side, bin) -> column-offset lookup
+	# ------------------------------------------------------------------
+
+	feature_names = []
+	col_offset = {}  # (side, bin_idx) -> column index
+	offset = 0
+	for side in sides:
+		for b in range(n_bins):
+			col_offset[(side, b)] = offset
+			bin_tag = f"_bin{b}" if multi_bin else ""
+			feature_names.append(f"{side}{bin_tag}_gc")
+			offset += 1
+
+	# Motif one-hot features (rotation-only canonical set; strand preserved).
+	canonical_motifs, motif_to_idx = build_motif_vocab(motif_len)
+	motif_feature_offset = len(feature_names)
+	for m in canonical_motifs:
+		feature_names.append(f"motif_{m}")
+
+	n_features = len(feature_names)
+	n_samples = len(str_df)
+
+	print(f"Building GC-content dataset:")
+	print(f"  data_path:      {data_path}")
+	print(f"  n_flanking_bp:  {n_flanking_bp}")
+	print(f"  flank_mode:     {flank_mode}")
+	print(f"  distance_bins:  {bins}")
+	print(f"  motif_len:      {motif_len}  ({canonical_motifs})")
+	print(f"  n_features:     {n_features}")
+	print(f"  n_samples:      {n_samples}")
+
+	# ------------------------------------------------------------------
+	# Build feature matrix
+	# ------------------------------------------------------------------
+
+	X = np.zeros((n_samples, n_features), dtype=np.float32)
+	L = n_flanking_bp
+
+	for i in tqdm(range(n_samples), desc="Computing GC content"):
+		row = str_df.iloc[i]
+		left_seq, right_seq = extract_flank_sequences(ref_genome, row, n_flanking_bp)
+
+		# Slice each flank into distance bins (measured from the STR) and
+		# compute one GC fraction per bin.
+		for b, (lo, hi) in enumerate(bins):
+			left_bin = left_seq[L - hi : L - lo]
+			right_bin = right_seq[lo:hi]
+
+			if flank_mode == "separate":
+				X[i, col_offset[("left", b)]] = gc_fraction(left_bin)
+				X[i, col_offset[("right", b)]] = gc_fraction(right_bin)
+			else:  # pooled: combine left + right bases into one GC fraction
+				X[i, col_offset[("flank", b)]] = gc_fraction(left_bin + right_bin)
+
+		# Motif one-hot, on this sample's strand.
+		canonical = sample_motif_canonical(ref_genome, row, motif_len)
 		X[i, motif_feature_offset + motif_to_idx[canonical]] = 1.0
 
 	# ------------------------------------------------------------------

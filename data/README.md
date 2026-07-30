@@ -50,10 +50,17 @@ cd data/scripts/create_STR_data_files
 Output is written to `data/STR_data/HipSTR_labeled_STRs/` as `str_len_{STR_LEN}_n_flanking_{N_FLANKING}.tsv` (e.g. `str_len_2_n_flanking_10000.tsv`), with a matching `.log` file. Each output row is one STR orientation with columns: `ID`, `chrom`, `str_start`, `str_end` (0-based half-open), `motif`, `ref_copy_number`, the carried label columns (`heterozygosity`, `mode_copy_number`, `num_called_total`), `split`, and `rev_comp`.
 
 
-## Preliminary analysis and visualizations
+## Preliminary analysis and visualizations of STR data
 
 The script `data/scripts/plot_label_dist.py` does the following preliminary analyses and visualizations of the STR datasets:
 
 1. Plots the distribution of each label (heterozygosity and mode copy number) in the datasets (by STR length). Also plots the log(x+1) distribution of the mode copy number to visualize the distribution that will be used for model training.
 
 2. Plots the relationship between heterozygosity and mode copy number in the two datasets. Computes the Pearson and Spearman correlations between these two labels in each dataset as well as the correlations between each label and the reference copy number.
+
+
+## Download Annotations
+
+The following scripts download annotations used to associate STRs or importance scores with various genomic attributes.
+
+TODO
