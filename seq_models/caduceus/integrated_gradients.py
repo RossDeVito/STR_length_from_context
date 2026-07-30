@@ -88,8 +88,10 @@ Outputs (written to {output_dir}/{desc}/):
 		"transforms": {task: transform_name}, "targets": {task: source_col},
 		"sequence_layout": {n_prefix_prompt, n_flanking_bp, n_str_bp,
 		n_str_prompt, n_suffix_prompt, seq_len, "order": [7 segment names]},
-		"ig_config": {n_steps, internal_batch_size, method, baseline,
-		subsample_loci, seed},
+		"ig_config": {n_steps, internal_batch_size_requested,
+		internal_batch_size_final, method, baseline, subsample_loci, seed}
+		("final" may be smaller than "requested" if a CUDA OOM forced
+		attribute_with_backoff() to shrink it partway through the run),
 		"n_samples", "device", "timestamp"}.
 """
 
@@ -209,6 +211,46 @@ def construct_baseline(
 	baseline[:, rf_start:rf_end] = mean_base_emb
 
 	return baseline
+
+
+# ---------------------------------------------------------------------------
+# OOM-resilient attribution
+# ---------------------------------------------------------------------------
+
+def attribute_with_backoff(
+	ig, inputs, baselines, target, n_steps, method, internal_batch_size,
+	device,
+):
+	"""Run ig.attribute(), halving internal_batch_size on CUDA OOM (floor 1).
+
+	A ~10k-token sequence (large n_flanking_bp) times internal_batch_size
+	copies through a deep backbone for backprop can exceed GPU memory well
+	before internal_batch_size=1. internal_batch_size only controls how
+	Captum chunks the n_steps interpolation points through the forward/
+	backward pass, not the mathematical result, so shrinking it on OOM is
+	always safe -- it just trades some speed for memory.
+
+	Returns:
+		(attrs, delta, internal_batch_size_used).
+	"""
+	batch_size = internal_batch_size
+	while True:
+		try:
+			attrs, delta = ig.attribute(
+				inputs, baselines=baselines, target=target, n_steps=n_steps,
+				method=method, internal_batch_size=batch_size,
+				return_convergence_delta=True,
+			)
+			return attrs, delta, batch_size
+		except torch.cuda.OutOfMemoryError:
+			if device.type == "cuda":
+				torch.cuda.empty_cache()
+			if batch_size <= 1:
+				raise
+			new_batch_size = max(1, batch_size // 2)
+			print(f"  CUDA OOM at internal_batch_size={batch_size}; "
+				  f"retrying at internal_batch_size={new_batch_size}")
+			batch_size = new_batch_size
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +384,12 @@ def main():
 	# memory even at small internal_batch_size. Gradient checkpointing
 	# recomputes activations during backward instead of caching them: same
 	# numerics, far less peak memory, at the cost of an extra forward pass.
+	# NOTE: observed to have no measurable effect on this Caduceus backbone
+	# (OOM recurred at the identical allocation point) -- likely because the
+	# remote-code model's checkpointing path is gated behind self.training,
+	# which is False here (model.eval() above). Left enabled anyway (harmless,
+	# may help other checkpoints); attribute_with_backoff() below is the fix
+	# that actually resolves the OOM, by shrinking internal_batch_size.
 	try:
 		model.caduceus.gradient_checkpointing_enable()
 		print("Gradient checkpointing enabled on the Caduceus backbone.")
@@ -433,9 +481,12 @@ def main():
 	ig = IntegratedGradients(wrapper)
 
 	n_steps = config.get("n_steps", 50)
-	internal_batch_size = config.get(
+	internal_batch_size_requested = config.get(
 		"internal_batch_size", config.get("batch_size", 32)
 	)
+	# May shrink permanently over the course of the run via
+	# attribute_with_backoff() below if it hits a CUDA OOM.
+	internal_batch_size = internal_batch_size_requested
 	ig_method = config.get("method", "gausslegendre")
 
 	print(f"IG config: n_steps={n_steps}, "
@@ -494,15 +545,11 @@ def main():
 			pred = inverse_transform(transforms[task], raw_pred)
 			baseline_pred = inverse_transform(transforms[task], raw_baseline_pred)
 
-			# Compute IG attributions for this task
-			attrs, delta = ig.attribute(
-				actual_embeds,
-				baselines=baseline_embeds,
-				target=t_idx,
-				n_steps=n_steps,
-				method=ig_method,
-				internal_batch_size=internal_batch_size,
-				return_convergence_delta=True,
+			# Compute IG attributions for this task (auto-shrinks
+			# internal_batch_size on CUDA OOM; see attribute_with_backoff).
+			attrs, delta, internal_batch_size = attribute_with_backoff(
+				ig, actual_embeds, baseline_embeds, t_idx, n_steps,
+				ig_method, internal_batch_size, device,
 			)
 
 			# Reduce to per-position: sum across hidden dim
@@ -649,7 +696,8 @@ def main():
 		},
 		"ig_config": {
 			"n_steps": n_steps,
-			"internal_batch_size": internal_batch_size,
+			"internal_batch_size_requested": internal_batch_size_requested,
+			"internal_batch_size_final": internal_batch_size,
 			"method": ig_method,
 			"baseline": "mean_ACGT_embedding (flanking only)",
 			"subsample_loci": subsample_loci,
