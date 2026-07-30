@@ -1,14 +1,14 @@
-# Method/n_steps evaluation run: gausslegendre @ n_steps=50 on a fixed
+# Method/n_steps evaluation run: riemann_trapezoid @ n_steps=100 on a fixed
 # 100-loci subsample. Compare against the other method_eval/ configs with
 # scripts/ig/compare_ig_methods.py.
 
 # --- Model (dir relative to scripts/training/output/caduceus/) ---
-model_dir: "caduceus_v0/str3/str3_f5000_fiv_v4_2026-07-06_16-11-21"
-desc: "caduceus_v0/method_eval/str3/gausslegendre_n50_subset"
+model_dir: "caduceus_v0/str4/str4_f5000_fiv_v4_2026-06-26_17-20-49"
+desc: "caduceus_v0/method_eval/str4/riemann_trapezoid_n100_subset"
 
 # --- Data loading ---
 split: "test"
-batch_size: 8
+batch_size: 16
 num_workers: 8
 
 # --- Fixed subsample so every method_eval config sees the identical loci ---
@@ -16,6 +16,6 @@ subsample_loci: 100
 seed: 42
 
 # --- Integrated Gradients ---
-n_steps: 50
+n_steps: 100
 internal_batch_size: 32
-method: "gausslegendre"
+method: "riemann_trapezoid"

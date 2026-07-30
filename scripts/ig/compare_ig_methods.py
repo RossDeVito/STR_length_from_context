@@ -21,7 +21,11 @@ import matplotlib.pyplot as plt
 # Configuration
 # ============================================================================
 
-SWEEP_DIR = "output/caduceus_v0/method_eval/str3"
+# Which STR motif length's method_eval sweep to compare -- must match a
+# scripts/ig/configs/method_eval/str{N}_*.yaml prefix / output subdirectory.
+STR_MOTIF_LEN = "str3"
+
+SWEEP_DIR = f"output/caduceus_v0/method_eval/{STR_MOTIF_LEN}"
 
 # Figure
 FIG_WIDTH = 12
@@ -156,7 +160,10 @@ for row, task in enumerate(tasks):
 
 		ax.set_xlabel("n_steps", color=INK_MUTED)
 		ax.set_ylabel(ylabel, color=INK_MUTED)
-		ax.set_title(f"[{task}] {title_suffix}", color=INK_PRIMARY, fontsize=11)
+		ax.set_title(
+			f"[{STR_MOTIF_LEN}/{task}] {title_suffix}",
+			color=INK_PRIMARY, fontsize=11,
+		)
 		ax.grid(True, color=GRIDLINE, linewidth=0.7)
 		for spine in ax.spines.values():
 			spine.set_color(AXIS_LINE)
