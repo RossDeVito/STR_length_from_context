@@ -17,5 +17,5 @@ seed: 42
 
 # --- Integrated Gradients ---
 n_steps: 500
-internal_batch_size: 32
+internal_batch_size: 4
 method: "gausslegendre"
