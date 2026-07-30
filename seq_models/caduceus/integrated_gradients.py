@@ -130,6 +130,14 @@ class EmbeddingForwardWrapper(nn.Module):
 	Returns a single (batch, n_tasks) tensor (rather than STRLengthModel's
 	native dict output) so Captum's `target=task_idx` can select which task
 	to attribute.
+
+	Runs the backbone under bf16 autocast (CUDA only) -- IG backpropagates
+	through the whole sequence x whole backbone, which in fp32 is roughly 2x
+	the memory of the "16-mixed" precision training already uses successfully
+	on the same GPUs (mamba_ssm's kernels are @custom_fwd/@custom_bwd
+	decorated, so they participate correctly in autocast). Output is cast
+	back to float32 since bf16 tensors can't convert to numpy directly and
+	downstream code (.item(), inverse_transform, np arrays) expects fp32.
 	"""
 
 	def __init__(self, str_model, task_names):
@@ -152,9 +160,15 @@ class EmbeddingForwardWrapper(nn.Module):
 			dtype=torch.long, device=input_embeds.device,
 		)
 
-		out = self.str_model(dummy_ids)
+		with torch.autocast(
+			device_type=input_embeds.device.type, dtype=torch.bfloat16,
+			enabled=(input_embeds.device.type == "cuda"),
+		):
+			out = self.str_model(dummy_ids)
 		handle.remove()
-		return torch.stack([out[name] for name in self.task_names], dim=-1)
+		return torch.stack(
+			[out[name].float() for name in self.task_names], dim=-1
+		)
 
 
 # ---------------------------------------------------------------------------
@@ -374,8 +388,14 @@ def main():
 	# ------------------------------------------------------------------
 	model, model_config, dataset, _ = load_model_and_data(config)
 	model.to(device)
-	# 32-bit for numerical stability of the IG interpolation/backward passes,
-	# regardless of the precision used during training (mirrors predict.py).
+	# Master weights stay fp32 (mirrors predict.py); the actual forward
+	# compute runs under bf16 autocast (EmbeddingForwardWrapper below),
+	# matching fine_tune.py's "16-mixed" training precision -- fp32 compute
+	# throughout uses roughly 2x the memory this same GPU handles fine during
+	# training, which is what was causing CUDA OOMs during IG's backward
+	# pass. bf16 does add a small rounding-noise floor to the convergence-
+	# delta comparisons the method_eval sweep uses, but it's far below the
+	# n_steps differences (50 vs 500) being compared.
 	model = model.float()
 
 	# IG backpropagates through the whole backbone, so every layer's
@@ -562,6 +582,14 @@ def main():
 			raw_baseline_predictions_acc[task].append(raw_baseline_pred.item())
 			labels_acc[task].append(batch[task].item())
 			deltas_acc[task].append(delta.item())
+
+			# Free this task's attribution graph/tensors before the next
+			# task's call -- a single call already uses most of the GPU's
+			# memory on long sequences, so leftover cached blocks from this
+			# task can be the difference between the next one fitting or not.
+			if device.type == "cuda":
+				del attrs, delta
+				torch.cuda.empty_cache()
 
 	# ------------------------------------------------------------------
 	# Stack shared arrays

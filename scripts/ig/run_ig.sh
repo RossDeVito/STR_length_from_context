@@ -23,7 +23,8 @@ if [ ! -f "${CONFIG_DIR}/${CONFIG_FILE}" ]; then
   exit 1
 fi
 
-# Run the command
-python -m seq_models.caduceus.integrated_gradients \
+# Run the command (-u: unbuffered stdout, so prints show up in the SLURM log
+# in real time instead of only on clean exit)
+python -u -m seq_models.caduceus.integrated_gradients \
     --config "${CONFIG_DIR}/${CONFIG_FILE}" \
     --output_dir "${OUTPUT_DIR}"
