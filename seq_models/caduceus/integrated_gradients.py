@@ -336,6 +336,18 @@ def main():
 	# regardless of the precision used during training (mirrors predict.py).
 	model = model.float()
 
+	# IG backpropagates through the whole backbone, so every layer's
+	# activations across the full (possibly ~10k-token, for large
+	# n_flanking_bp) sequence must be kept for backward -- easily exceeds GPU
+	# memory even at small internal_batch_size. Gradient checkpointing
+	# recomputes activations during backward instead of caching them: same
+	# numerics, far less peak memory, at the cost of an extra forward pass.
+	try:
+		model.caduceus.gradient_checkpointing_enable()
+		print("Gradient checkpointing enabled on the Caduceus backbone.")
+	except Exception as exc:
+		print(f"WARNING: could not enable gradient checkpointing: {exc}")
+
 	task_names = list(model.task_names)
 	transforms = model.transforms
 	targets = model.targets
