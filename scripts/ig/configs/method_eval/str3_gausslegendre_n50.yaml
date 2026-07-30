@@ -8,7 +8,7 @@ desc: "caduceus_v0/method_eval/str3/gausslegendre_n50_subset"
 
 # --- Data loading ---
 split: "test"
-batch_size: 8
+batch_size: 16
 num_workers: 8
 
 # --- Fixed subsample so every method_eval config sees the identical loci ---
@@ -17,5 +17,5 @@ seed: 42
 
 # --- Integrated Gradients ---
 n_steps: 50
-internal_batch_size: 32
+internal_batch_size: 16
 method: "gausslegendre"
