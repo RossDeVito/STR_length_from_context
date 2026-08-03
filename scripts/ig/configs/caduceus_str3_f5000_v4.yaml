@@ -8,6 +8,6 @@ batch_size: 16
 num_workers: 8
 
 # --- Integrated Gradients ---
-n_steps: 300
-internal_batch_size: 32
-method: "gausslegendre"
+n_steps: 250
+internal_batch_size: 16
+method: "riemann_trapezoid"

@@ -41,6 +41,13 @@ METHOD_COLORS = {
 }
 FALLBACK_COLOR = "#898781"  # muted ink, for any method not in METHOD_COLORS
 
+# Human-readable display name for a task, used in the printed table and plot
+# titles only (task keys themselves stay as meta.json's task_names, e.g.
+# "variation", since those are what index into convergence.json).
+TASK_DISPLAY_NAMES = {
+	"variation": "heterozygosity",
+}
+
 INK_PRIMARY = "#0b0b0b"
 INK_MUTED = "#898781"
 GRIDLINE = "#e1e0d9"
@@ -83,7 +90,7 @@ for run_dir in run_dirs:
 	for task in meta["task_names"]:
 		rel = conv[task]["relative_delta"]
 		records.append({
-			"task": task,
+			"task": TASK_DISPLAY_NAMES.get(task, task),
 			"method": method,
 			"n_steps": n_steps,
 			"n_samples": meta["n_samples"],
