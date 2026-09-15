@@ -1,0 +1,58 @@
+# Maps an "annotation type" name to where/how to read it. Consumed by
+# annotation_utils.py and scripts in this directory (e.g. inspect_annotation.py).
+#
+# Fields:
+#   file_type     "bed" or "bigwig"
+#   value_type    "discrete" or "continuous"
+#   path          Path to the primary file, relative to this directory.
+#   genome_build  e.g. "hg38"
+#   description   Prose description of what the value means.
+#   doi           Bare DOI for the source publication (download URL lives in
+#                 the sibling download.sh instead).
+#   columns       (bed only) Ordered column names for the header-less bed
+#                 file, passed as `names=` to pandas.
+#   value_column  (bed only) The column that holds this entry's actual value,
+#                 after loading (and, if `join_path` is set, after the join).
+#                 Not needed for bigwig entries, which have exactly one
+#                 implicit value per interval.
+#   join_path     (optional) Path to a secondary file needed to reach
+#                 `value_column` (e.g. ChromHMM's state metadata csv). The
+#                 join mechanics themselves (key derivation, merge) live in
+#                 annotation_utils.py.
+
+phyloP:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/phyloP/hg38.phyloP447way.bw
+  genome_build: hg38
+  description: >
+    phyloP conservation score (447-way mammalian alignment); positive =
+    conserved (evolving slower than neutral), negative = accelerated
+    (evolving faster than neutral). The absolute values of phyloP scores
+    represent -log p-values under a null hypothesis of neutral evolution.
+  doi: 10.1038/s41586-023-06798-8
+
+ChromHMM_state:
+  file_type: bed
+  value_type: discrete
+  path: ../../data/annotations/full_stack_ChromHMM/hg38_genome_100_segments.bed.gz
+  genome_build: hg38
+  description: >
+    Full-stack ChromHMM 100-state chromatin state label.
+  doi: 10.1186/s13059-021-02572-z
+  columns: [chrom, start, end, segment_name]
+  value_column: mneumonics
+  join_path: ../../data/annotations/full_stack_ChromHMM/state_annotations_processed.csv
+
+ChromHMM_group:
+  file_type: bed
+  value_type: discrete
+  path: ../../data/annotations/full_stack_ChromHMM/hg38_genome_100_segments.bed.gz
+  genome_build: hg38
+  description: >
+    Coarse ChromHMM state group (16 categories), from
+    state_annotations_processed.csv's `Group` column.
+  doi: 10.1186/s13059-021-02572-z
+  columns: [chrom, start, end, segment_name]
+  value_column: Group
+  join_path: ../../data/annotations/full_stack_ChromHMM/state_annotations_processed.csv

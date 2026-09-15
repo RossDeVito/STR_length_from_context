@@ -45,6 +45,9 @@ TARGETS = {
 # statistically meaningful.
 MIN_RESAMPLE_N = 10
 
+# Default number of equal-frequency bins for the quintile-split evaluation.
+DEFAULT_N_QUANTILES = 5
+
 
 def get_metrics(pred, true):
 	"""Regression metrics for a set of predictions (replicated from
@@ -112,6 +115,61 @@ def bootstrap_ci(pred, true, n_boot, ci_level, rng, resample_frac=1.0):
 	}
 
 
+def compute_quantile_edges(values, n_quantiles=DEFAULT_N_QUANTILES):
+	"""Global bin edges for n_quantiles equal-frequency bins over `values`
+	(e.g. true label values pooled across all model series for one target),
+	via pd.qcut(..., duplicates="drop"). Returns the sorted edge array
+	(len = n_bins + 1), or None if ties collapse it below 2 bins."""
+	values = np.asarray(values)
+	_, edges = pd.qcut(values, q=n_quantiles, retbins=True, duplicates="drop")
+	n_bins = len(edges) - 1
+	if n_bins < 2:
+		print(f"  [warn] quantile edges degenerate ({n_bins} bin(s) from "
+			  f"{len(values)} pooled values); skipping quantile eval")
+		return None
+	if n_bins < n_quantiles:
+		print(f"  [warn] only {n_bins}/{n_quantiles} distinct quantile bins "
+			  f"(tied values); continuing with {n_bins} bins")
+	return edges
+
+
+def assign_quantile_bin(values, edges):
+	"""Assign each value to a 0-indexed bin using pre-computed global `edges`
+	(from compute_quantile_edges) via pd.cut -- NOT a fresh qcut -- so every
+	series is binned against the same boundaries. Edges are extended to
+	+/-inf at the extremes so a series whose local min/max falls outside the
+	pooled range still lands in the outermost bin rather than becoming NaN."""
+	edges = np.array(edges, dtype=float)
+	edges[0], edges[-1] = -np.inf, np.inf
+	return pd.cut(values, bins=edges, labels=False, include_lowest=True)
+
+
+def compute_locus_errors(pred, true, kinds):
+	"""Per-locus error values, computed once over the full series (never
+	rescored on a subset). Used so the quantile breakdown can show the
+	*distribution* of an already-computed per-locus quantity split by bin,
+	rather than recomputing a whole-array metric (R2, Spearman, ...) on each
+	narrow subset -- which is unstable for R2 in particular, since a bin's
+	local variance (its R2 denominator) shrinks as the bin narrows.
+
+	kinds: subset of {"squared_error", "abs_error", "signed_error",
+	"pct_error"} ("pct_error" is on a 0-100 scale, e.g. 50.0 = 50%, not
+	0.5). Returns {kind: np.ndarray} aligned with pred/true."""
+	pred, true = np.asarray(pred, dtype=float), np.asarray(true, dtype=float)
+	diff = pred - true
+	out = {}
+	if "squared_error" in kinds:
+		out["squared_error"] = diff ** 2
+	if "abs_error" in kinds:
+		out["abs_error"] = np.abs(diff)
+	if "signed_error" in kinds:
+		out["signed_error"] = diff
+	if "pct_error" in kinds:
+		with np.errstate(divide="ignore", invalid="ignore"):
+			out["pct_error"] = 100 * np.abs(diff) / np.abs(true)
+	return out
+
+
 if __name__ == "__main__":
 
 	# ------------------------------------------------------------------
@@ -119,7 +177,18 @@ if __name__ == "__main__":
 	# ------------------------------------------------------------------
 	str_len = 4  # which STR length to evaluate; must be a key of MODEL_CONFIGS
 
-	plot_metrics = ["Spearman_r", "R2"]  # one bar-chart figure per metric per target
+	plot_metrics = ["Spearman_r"] #, "R2"]  # one bar-chart figure per metric per target
+
+	# Additive: also split each target's loci into quantile bins by its own
+	# true value (see compute_quantile_edges / assign_quantile_bin) and show
+	# how a per-locus error, computed once over the whole series, is
+	# distributed within each bin -- no metric (R2/Spearman/...) is rescored
+	# per bin. Set False to reproduce pre-quintile behavior.
+	enable_quintile_eval = True
+	n_quantiles = 5
+	# Per-locus error kind(s) to show the distribution of; see
+	# compute_locus_errors for the available options.
+	quantile_error_metrics = ["squared_error", "pct_error"]
 
 	n_boot = 1000
 	resample_frac = 1.0   # fraction of n loci drawn (w/ replacement) per bootstrap
@@ -196,12 +265,14 @@ if __name__ == "__main__":
 	# Build results: one row per (series, target).
 	# ------------------------------------------------------------------
 	results = []
+	loaded_preds = {}  # config_key -> pred_df, reused below by quintile pass
 
 	for config_key, run_name in model_paths.items():
 		run_dir = os.path.join(SERIES_ROOT[config_key], f"str{str_len}", run_name)
 		pred_df = load_predictions(run_dir)
 		if pred_df is None:
 			continue
+		loaded_preds[config_key] = pred_df
 		for task in detect_tasks(pred_df):
 			pred_arr = pred_df[f"pred_{task}"].to_numpy()
 			true_arr = pred_df[f"true_{task}"].to_numpy()
@@ -266,6 +337,96 @@ if __name__ == "__main__":
 			print(target_df[present_ci_cols].to_string(index=False, max_colwidth=40))
 
 	# ------------------------------------------------------------------
+	# Quintile-split evaluation: bin each target's loci into n_quantiles
+	# equal-frequency bins by that target's own true value (bin edges shared
+	# across all series -- pooled + deduped by locus id, then every series is
+	# assigned into those same edges). Each per-locus error in
+	# quantile_error_metrics is computed ONCE over the full series (see
+	# compute_locus_errors) -- no metric is recomputed on a subset -- and we
+	# simply show how that already-computed per-locus quantity is
+	# distributed within each bin. Mean baselines have no per-locus
+	# predictions, so they never appear here.
+	# ------------------------------------------------------------------
+	quintile_frames = []
+	quintile_edges = {}  # target -> edges, for bin-range annotations below
+
+	if enable_quintile_eval:
+		for target in TARGETS:
+			target_frames = [
+				df for df in loaded_preds.values() if target in detect_tasks(df)
+			]
+			if not target_frames:
+				continue
+			pooled = pd.concat(
+				[df[["id", f"true_{target}"]] for df in target_frames],
+				ignore_index=True,
+			).drop_duplicates(subset="id")
+
+			edges = compute_quantile_edges(
+				pooled[f"true_{target}"].to_numpy(), n_quantiles
+			)
+			if edges is None:
+				continue
+			quintile_edges[target] = edges
+
+			for config_key, run_name in model_paths.items():
+				pred_df = loaded_preds.get(config_key)
+				if pred_df is None or target not in detect_tasks(pred_df):
+					continue
+				pred_arr = pred_df[f"pred_{target}"].to_numpy()
+				true_arr = pred_df[f"true_{target}"].to_numpy()
+				errors = compute_locus_errors(
+					pred_arr, true_arr, quantile_error_metrics
+				)
+				bins = assign_quantile_bin(true_arr, edges)
+				quintile_frames.append(pd.DataFrame({
+					"series": SERIES_SOURCE_KEY[config_key],
+					"target": target,
+					"model": run_name,
+					"quintile": bins.astype(int) + 1,  # 1-indexed, Q1 = lowest true
+					**errors,
+				}))
+
+	quintile_df = (
+		pd.concat(quintile_frames, ignore_index=True)
+		if quintile_frames else pd.DataFrame()
+	)
+
+	if enable_quintile_eval and len(quintile_df) > 0:
+		for target in TARGETS:
+			target_qdf = quintile_df[quintile_df["target"] == target]
+			if len(target_qdf) == 0:
+				continue
+			edges = quintile_edges[target]
+			n_bins = len(edges) - 1
+
+			print(f"\n===== Target: {target} -- per-locus error distribution "
+				  f"by quantile bin ({n_bins} bins) =====")
+			for kind in quantile_error_metrics:
+				summary = (
+					target_qdf.groupby(["quintile", "series"])[kind]
+					.agg(n="count", mean="mean", median="median", std="std",
+						 q25=lambda s: s.quantile(0.25),
+						 q75=lambda s: s.quantile(0.75))
+					.reset_index()
+				)
+				summary["bin_lo"] = summary["quintile"].map(
+					lambda q: edges[q - 1]
+				)
+				summary["bin_hi"] = summary["quintile"].map(
+					lambda q: edges[q]
+				)
+				summary["_series_ord"] = summary["series"].map(series_order)
+				summary = summary.sort_values(
+					by=["quintile", "_series_ord"]
+				).drop(columns="_series_ord")
+				print(f"\n----- {kind} -----")
+				print(summary[[
+					"quintile", "bin_lo", "bin_hi", "series", "n",
+					"mean", "median", "std", "q25", "q75",
+				]].to_string(index=False, max_colwidth=40))
+
+	# ------------------------------------------------------------------
 	# Plot: one bar chart per (target, metric). Bars = series present for
 	# that target; error bars = bootstrap CI (mean baselines get none).
 	# ------------------------------------------------------------------
@@ -320,3 +481,52 @@ if __name__ == "__main__":
 			ax.grid(True, axis="y", alpha=0.3)
 			plt.tight_layout()
 			plt.show()
+
+	# ------------------------------------------------------------------
+	# Plot: one point+CI plot per (target, error kind) for the quintile-split
+	# evaluation. X-axis = quintile bin (low-to-high true value); within each
+	# bin, one point per series = mean of that per-locus error (computed once
+	# over the whole series, see compute_locus_errors -- never rescored on
+	# the subset), with a seaborn-bootstrapped 95% CI on the mean.
+	# ------------------------------------------------------------------
+	if enable_quintile_eval and len(quintile_df) > 0:
+		for target in TARGETS:
+			target_qdf = quintile_df[quintile_df["target"] == target]
+			if len(target_qdf) == 0:
+				continue
+
+			present_series = [s for s in SERIES_STYLE if s in target_qdf["series"].values]
+			if not present_series:
+				continue
+			plot_df = target_qdf.copy()
+			plot_df["series_label"] = plot_df["series"].map(
+				lambda s: SERIES_STYLE[s]["label"]
+			)
+			hue_order = [SERIES_STYLE[s]["label"] for s in present_series]
+			palette = {SERIES_STYLE[s]["label"]: SERIES_STYLE[s]["color"] for s in present_series}
+
+			for kind in quantile_error_metrics:
+				kdf = plot_df.dropna(subset=[kind])
+				if len(kdf) == 0:
+					continue
+
+				fig, ax = plt.subplots(figsize=(11, 6))
+				sns.pointplot(
+					data=kdf, x="quintile", y=kind, hue="series_label",
+					hue_order=hue_order, palette=palette, ax=ax,
+					estimator="mean", errorbar=("ci", 95),
+					dodge=0.4, linestyle="none", capsize=0.05, markersize=5,
+				)
+				ax.set_xlabel(f"True {target} quantile bin (low -> high)")
+				ylabel = kind.replace("_", " ").title()
+				if kind == "pct_error":
+					ylabel += " (%)"
+				ax.set_ylabel(ylabel)
+				ax.set_title(
+					f"{target.capitalize()} per-locus {kind.replace('_', ' ')} "
+					f"distribution by true-value quantile -- STR length {str_len}"
+				)
+				ax.grid(True, axis="y", alpha=0.3)
+				ax.legend(loc="best", fontsize=8, title=None)
+				plt.tight_layout()
+				plt.show()

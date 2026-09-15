@@ -34,7 +34,8 @@ ATTR_DIR = "output/caduceus_v0/str3/str3_f5000_fiv_v4"
 # Which task's attributions/predictions to plot (must be one of the
 # checkpoint's active targets, e.g. "length" or "variation" -- see
 # {ATTR_DIR}/meta.json "task_names").
-TASK = "length"
+# TASK = "length"
+TASK = "variation"
 
 # Confidence interval level (0-1), e.g. 0.95 for 95% CI
 CI_LEVEL = 0.95
@@ -49,7 +50,7 @@ PRED_DIFF_THRESHOLD = 0.05
 
 # Filter: maximum relative convergence delta to include a sample.
 # Set to None to skip this filter.
-REL_DELTA_THRESHOLD = None
+REL_DELTA_THRESHOLD = 0.05
 
 # Figure size (per subplot)
 FIG_WIDTH = 20
@@ -433,12 +434,13 @@ def plot_attribution_panel(ax, mean_attr, ci_lower, ci_upper, title_str):
 	xmin = -(n_left_flank + n_prefix)
 	xmax = gap_end + n_right_flank
 	tick_step = 500
-	left_ticks = list(range(-2000, 0, tick_step))
+	left_bp = list(range(tick_step, n_left_flank + 1, tick_step))
 	right_bp = list(range(tick_step, n_right_flank + 1, tick_step))
+	left_ticks = [-bp for bp in left_bp]
 	right_ticks = [gap_end + bp for bp in right_bp]
 
 	all_ticks = left_ticks + right_ticks
-	all_labels = [str(t) for t in left_ticks] + [str(bp) for bp in right_bp]
+	all_labels = [str(-bp) for bp in left_bp] + [str(bp) for bp in right_bp]
 
 	ax.set_xticks(all_ticks)
 	ax.set_xticklabels(all_labels)

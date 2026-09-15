@@ -79,9 +79,18 @@ if __name__ == "__main__":
 	# Which task's attributions/predictions to plot (must be one of the
 	# checkpoint's active targets, e.g. "length" or "variation" -- see
 	# {ATTR_DIR}/meta.json "task_names").
-	TASK = "length"
+	# TASK = "length"
+	TASK = "variation"
 
-	LOCUS_ID = "Human_STR_422778"
+	# Human-readable display name for a task, used in the printed summary and
+	# plot titles only (TASK itself stays as meta.json's task_names key, e.g.
+	# "variation", since that's what indexes into attributions.npz).
+	TASK_DISPLAY_NAMES = {
+		"variation": "heterozygosity",
+	}
+	TASK_DISPLAY = TASK_DISPLAY_NAMES.get(TASK, TASK)
+
+	LOCUS_ID = "Human_STR_1010884"
 	MAX_DIST = 200  # max bp from STR to include in each direction
 
 	# Figure
@@ -230,18 +239,24 @@ if __name__ == "__main__":
 	fwd_pred_diff_val = float(fwd_pred_diff)
 	rc_pred_diff_val = float(rc_pred_diff)
 
-	# Extract repeat unit from the start of the STR region.
-	# STR motifs are at most 2 bp, so the first 1-2 non-X bases give the unit.
+	# Extract repeat unit from the start of the STR region by finding the
+	# smallest period (1-6 bp, covering mono- through hexanucleotide STRs)
+	# that tiles the non-X bases.
 	str_left = fwd_seq[lf_end : lf_end + n_left_str]
 	str_left_clean = str_left.replace("X", "").replace("x", "")
 
-	# Detect repeat unit length (1 or 2) by checking periodicity
-	if len(str_left_clean) >= 2 and str_left_clean[0] != str_left_clean[1]:
-		repeat_unit = str_left_clean[:2]
-	else:
-		repeat_unit = str_left_clean[:1]
+	MAX_MOTIF_LEN = 6
+	repeat_unit = str_left_clean[:MAX_MOTIF_LEN]
+	for period in range(1, min(MAX_MOTIF_LEN, len(str_left_clean)) + 1):
+		unit = str_left_clean[:period]
+		if all(
+			str_left_clean[i] == unit[i % period]
+			for i in range(len(str_left_clean))
+		):
+			repeat_unit = unit
+			break
 
-	print(f"Locus: {LOCUS_ID}  (task: {TASK}, transform: {transform_name})")
+	print(f"Locus: {LOCUS_ID}  (task: {TASK_DISPLAY}, transform: {transform_name})")
 	print(f"  Repeat unit: {repeat_unit}")
 	print(f"  True:       {true_cn:.4g}")
 	print(f"  Fwd pred:   {fwd_pred_cn:.4g}  "
@@ -297,7 +312,7 @@ if __name__ == "__main__":
 	axes[-1].set_xlabel("Position relative to STR (bp)")
 
 	fig.suptitle(
-		f"{LOCUS_ID}  [{TASK}]    |    STR: [{repeat_unit}]{true_cn:.4g}"
+		f"{LOCUS_ID}  [{TASK_DISPLAY}]    |    STR: [{repeat_unit}]{true_cn:.4g}"
 		f"    |    Fwd pred: {fwd_pred_cn:.4g}"
 		f"    |    RC pred: {rc_pred_cn:.4g}",
 		fontsize=13, fontweight="bold",

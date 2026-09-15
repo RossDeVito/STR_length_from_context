@@ -62,13 +62,28 @@ def canonical_kmer(kmer):
 	return min(kmer, rc)
 
 
-# STR motif canonicalization (matches get_baseline_performance.py)
-STR_CANONICALIZATION = {
-	"A": "A", "C": "C", "G": "C", "T": "A",
-	"AC": "AC", "CA": "AC", "AG": "AG", "GA": "AG",
-	"AT": "AT", "TA": "AT", "CG": "CG", "GC": "CG",
-	"CT": "AG", "TC": "AG", "GT": "AC", "TG": "AC",
-}
+# STR motif canonicalization (matches get_mean_baseline_performance.py)
+def canonicalize_motif(motif):
+	"""Canonicalize an STR motif so it is invariant to rotation and strand.
+
+	Returns the lexicographically smallest string over all rotations of the
+	motif and all rotations of its reverse complement (e.g. "AC", "CA",
+	"GT", "TG" all collapse to "AC").
+	"""
+	candidates = []
+	for s in (motif, reverse_complement(motif)):
+		for i in range(len(s)):
+			candidates.append(s[i:] + s[:i])
+	return min(candidates)
+
+
+def detect_repeat_unit(seq, max_period=6):
+	"""Detect the smallest period (<= max_period) that tiles `seq`."""
+	for period in range(1, min(max_period, len(seq)) + 1):
+		unit = seq[:period]
+		if all(seq[i] == unit[i % period] for i in range(len(seq))):
+			return unit
+	return seq[:max_period]
 
 
 def extract_motif_from_sequence(sequence, lf_end, n_str_bp):
@@ -83,7 +98,7 @@ def extract_motif_from_sequence(sequence, lf_end, n_str_bp):
 		n_str_bp: Number of STR bases stored on each side.
 
 	Returns:
-		Canonicalized motif string (e.g. "A", "AC").
+		Canonicalized motif string (e.g. "A", "AC", "AAT").
 	"""
 	str_region = sequence[lf_end:lf_end + n_str_bp]
 	str_clean = str_region.replace("X", "").replace("x", "")
@@ -91,13 +106,9 @@ def extract_motif_from_sequence(sequence, lf_end, n_str_bp):
 	if len(str_clean) == 0:
 		return "unknown"
 
-	# Detect repeat unit length
-	if len(str_clean) >= 2 and str_clean[0] != str_clean[1]:
-		repeat_unit = str_clean[:2]
-	else:
-		repeat_unit = str_clean[:1]
+	repeat_unit = detect_repeat_unit(str_clean)
 
-	return STR_CANONICALIZATION.get(repeat_unit, repeat_unit)
+	return canonicalize_motif(repeat_unit)
 
 
 # ---------------------------------------------------------------------------

@@ -41,7 +41,7 @@ TASK = "length"
 # Hard filters: loci failing these are excluded entirely.
 # Set to None to disable a filter.
 MIN_PRED_DIFF = 0.05       # minimum abs prediction difference (both strands)
-MAX_REL_DELTA = None        # maximum relative convergence delta (both strands)
+MAX_REL_DELTA = 0.05        # maximum relative convergence delta (both strands)
 MAX_PRED_ERROR = None       # maximum abs prediction error (both strands)
 
 # Composite score weights (will be normalized to sum to 1).
@@ -50,7 +50,7 @@ MAX_PRED_ERROR = None       # maximum abs prediction error (both strands)
 # Higher composite score = better candidate.
 W_PRED_ERROR = 1.0    # weight for prediction accuracy (low error)
 W_REL_DELTA = 1.0     # weight for convergence quality (low delta)
-W_PRED_DIFF = 5.0     # weight for prediction difference (high diff)
+W_PRED_DIFF = 10.0     # weight for prediction difference (high diff)
 
 # Number of top candidates to display
 N_TOP = 20

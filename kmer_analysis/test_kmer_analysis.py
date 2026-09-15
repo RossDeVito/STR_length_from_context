@@ -18,7 +18,7 @@ from kmer_extract import (
 	reverse_complement,
 	canonical_kmer,
 	extract_motif_from_sequence,
-	STR_CANONICALIZATION,
+	canonicalize_motif,
 )
 from kmer_enrichment import (
 	run_stratified_permutation_test,
@@ -113,25 +113,46 @@ class TestExtractMotifFromSequence:
 		motif = extract_motif_from_sequence(seq, 110, 3)
 		assert motif == "A"
 
+	def test_trinucleotide(self):
+		# AAT repeat (period 3) -- regression test: a period-1/2-only
+		# heuristic would misread this as homopolymer "A".
+		seq = "X" * 10 + "N" * 100 + "AATAATAA" + "X" * 20 + "AATAATAA" + "N" * 100
+		motif = extract_motif_from_sequence(seq, 110, 8)
+		assert motif == canonicalize_motif("AAT")
 
-class TestSTRCanonicalization:
+	def test_tetranucleotide(self):
+		seq = "X" * 10 + "N" * 100 + "AGATAGAT" + "X" * 20 + "AGATAGAT" + "N" * 100
+		motif = extract_motif_from_sequence(seq, 110, 8)
+		assert motif == canonicalize_motif("AGAT")
 
-	def test_all_homopolymers_have_entries(self):
+
+class TestCanonicalizeMotif:
+
+	def test_all_homopolymers(self):
 		for base in "ACGT":
-			assert base in STR_CANONICALIZATION
+			assert canonicalize_motif(base) in "ACGT"
 
 	def test_complement_pairs(self):
-		assert STR_CANONICALIZATION["A"] == STR_CANONICALIZATION["T"]
-		assert STR_CANONICALIZATION["C"] == STR_CANONICALIZATION["G"]
+		assert canonicalize_motif("A") == canonicalize_motif("T")
+		assert canonicalize_motif("C") == canonicalize_motif("G")
 
 	def test_dinucleotide_rc_pairs(self):
 		# AC/TG/CA/GT should all canonicalize to the same thing
-		vals = {STR_CANONICALIZATION[k] for k in ["AC", "TG", "CA", "GT"]}
+		vals = {canonicalize_motif(k) for k in ["AC", "TG", "CA", "GT"]}
 		assert len(vals) == 1
 
 		# AG/TC/CT/GA should all canonicalize to the same thing
-		vals = {STR_CANONICALIZATION[k] for k in ["AG", "TC", "CT", "GA"]}
+		vals = {canonicalize_motif(k) for k in ["AG", "TC", "CT", "GA"]}
 		assert len(vals) == 1
+
+	def test_trinucleotide_rotation_and_strand(self):
+		# All rotations of AAT, and of its RC (ATT), should canonicalize
+		# to the same motif.
+		vals = {canonicalize_motif(k) for k in ["AAT", "ATA", "TAA"]}
+		assert len(vals) == 1
+
+		rc_vals = {canonicalize_motif(k) for k in ["ATT", "TTA", "TAT"]}
+		assert rc_vals == vals
 
 
 # ===========================================================================

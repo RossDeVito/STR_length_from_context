@@ -43,6 +43,9 @@ echo "==> Installing torch 2.2.0 + transformers + project deps (numpy<2 / pandas
 python -m pip install --upgrade pip
 python -m pip install -r "${REPO_ROOT}/requirements_gpu.txt"
 
+echo "==> Installing seq_models in editable mode (so it's importable regardless of cwd)"
+python -m pip install -e "${REPO_ROOT}" --no-deps
+
 echo "==> Installing prebuilt mamba/causal kernels (--no-deps)"
 python -m pip uninstall -y causal_conv1d mamba_ssm || true
 python -m pip install --no-deps "${CAUSAL_WHL}"

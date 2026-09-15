@@ -1,5 +1,6 @@
 # STR Length Model — Python dependencies
-# Install with: pip install -r requirements.txt
+# Install with: pip install -r requirements.txt && pip install -e . --no-deps
+# (the editable install makes `seq_models` importable regardless of cwd)
 #
 # PyTorch: install separately first if you need a specific CUDA version.
 # See https://pytorch.org/get-started/locally/
@@ -20,6 +21,7 @@ statsmodels
 
 # --- Genomics ---
 pyfaidx
+pyBigWig
 
 # --- Visualisation ---
 matplotlib
