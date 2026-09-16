@@ -29,8 +29,7 @@ Coefficients are already in standardized-feature space (train_and_pred.py
 scales X with StandardScaler before fitting Ridge), so |coef| is comparable
 across features/categories without further normalization.
 
-Configuration is via the editable constants below (no argparse), mirroring
-scripts/region_permutation_importance/analyze_caduceus.py.
+Configuration is via the editable constants below (no argparse).
 """
 
 import os
@@ -54,7 +53,6 @@ RUN_DIR = "../eval_preds/predictions/baseline/lin/str4/str4_f5000_gc_100_pooled"
 OUT_DIR = None  # None -> {RUN_DIR}/analysis
 TOP_N = 30      # top-N features to show in bar plots
 
-# Same convention as scripts/region_permutation_importance/analyze_caduceus.py
 FLANK_LABELS = {"left": "Upstream", "right": "Downstream", "flank": "Flank (pooled)"}
 FLANK_COLORS = {"left": "#3170ad", "right": "#e8443a", "flank": "#3170ad"}
 MOTIF_LABEL = "Motif"

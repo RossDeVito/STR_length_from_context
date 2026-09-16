@@ -27,27 +27,36 @@ For each locus, the RC flank attributions are flipped to align with
 forward genomic positions, then averaged with the forward attributions
 (see ig_by_pos.py for the rationale).
 
-Normalization happens in three stages:
+Normalization happens in two stages:
 
-1. Per-sample prediction-difference scaling (as in ig_by_pos.py): each
-   sample's attributions are divided by the raw prediction difference
-   (F(input) - F(baseline)), so the SIGNED attributions sum to ~1.
+1. Per-orientation normalization, shared with every other IG-by-position
+   script (see seq_models/ig_attribution_norm.py). NORM_SCHEME picks the scheme:
 
-2. Per-locus mass normalization (PER_LOCUS_MASS_NORM): taking the
-   absolute value breaks the sum-to-1 property, because positive and
-   negative attributions no longer cancel. Total |attribution| per locus
-   varies substantially locus to locus and is itself correlated with
-   other locus properties (see ig_by_pos_label_strat.py for the length
-   example: r = -0.56 against copy number). Left uncorrected, that
-   per-locus scalar shows up as a flat vertical offset for each quantile
-   group, burying any actual positional difference. Rescaling each
-   locus's profile to unit absolute mass makes every locus contribute
-   equally, so the plot answers "where does this group put its
-   attribution" rather than "how much total mass does this group have".
-   The mass effect itself is real and interesting, so per-group mean
-   absolute mass is printed to the console rather than discarded.
+   "l1_mass" (default) rescales each orientation to unit absolute
+   attribution mass across the flanks. IG's completeness axiom makes the
+   SIGNED attributions sum to the prediction shift, but taking an
+   absolute value breaks that property, because positive and negative
+   attributions no longer cancel. Total |attribution| per locus varies
+   substantially locus to locus and is itself correlated with other locus
+   properties (see ig_by_pos_label_strat.py for the length example:
+   r = -0.56 against copy number). Left uncorrected, that per-locus
+   scalar shows up as a flat vertical offset for each quantile group,
+   burying any actual positional difference. Under "l1_mass" every locus
+   contributes equally, so the plot answers "where does this group put
+   its attribution" rather than "how much total mass does this group
+   have". The mass effect itself is real and interesting, so per-group
+   mean mass (in units of the prediction shift) is printed to the console
+   rather than discarded.
 
-3. Per-position group normalization (NORMALIZE_BY_OVERALL_MEAN): the raw
+   "pred_diff" instead divides each orientation by the absolute
+   prediction shift, leaving that mass scalar in the profiles.
+
+   The forward and RC profiles are then averaged while still SIGNED, and
+   the absolute value is taken last (abs-of-mean, not mean-of-abs), so
+   positions where the two orientations disagree in sign are
+   down-weighted instead of being summed as if they agreed.
+
+2. Per-position group normalization (NORMALIZE_BY_OVERALL_MEAN): the raw
    per-position attribution profile is dominated by a shared shape (decay
    with distance from the STR, prompt-proximity artifacts) that has
    nothing to do with the error. That shared shape would dwarf any
@@ -60,19 +69,20 @@ Normalization happens in three stages:
    approximation (it does not propagate the overall mean's own sampling
    uncertainty into the CI band).
 
-With stages 2 and 3 both enabled, every group's line is guaranteed to
-cross 1.0: each group's per-position mean sums to 1 across positions, as
-does the pooled mean, so the ratio's overall-mean-weighted average is
-exactly 1. A group that sits above 1.0 everywhere is a sign that stage 2
-is off and a scalar mass difference is being plotted as a positional one.
+Under "l1_mass" each orientation carries unit mass, but the forward/RC
+average does not: where the two orientations disagree in sign they
+partially cancel, so a locus's post-average mass is <= 1 and equals the
+fraction of its mass on which the strands agree. Group lines therefore
+still sit near 1.0 in stage 2 but are not guaranteed to cross it exactly;
+a group offset that is flat across all positions now means that group's
+strands agree more (or less) than average.
 
 SHOW_FOLDED adds a second figure that collapses the upstream and
 downstream flanks into a single distance-from-STR axis. The fold happens
-between stages 2 and 3: the two sides are SUMMED per distance bin (they
+between stages 1 and 2: the two sides are SUMMED per distance bin (they
 are different bases being aggregated, not repeat measurements of one
 base, which is why the forward/RC step averages but this one sums), so a
-unit-mass locus stays unit-mass and the stage-3 crossing guarantee still
-holds. Folding was validated as safe on this data in
+locus's total mass is unchanged by folding. Folding was validated as safe on this data in
 ig_by_pos_label_strat.py (upstream/downstream profiles correlate at
 0.9999, no significant asymmetry) and that conclusion is a property of
 sequence layout, not of the label or error used for stratification, so it
@@ -84,6 +94,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import os
+
+import seq_models.ig_attribution_norm as ign
 
 # ============================================================================
 # Configuration
@@ -118,11 +130,13 @@ PRED_DIFF_THRESHOLD = 0.05
 # Set to None to skip this filter.
 REL_DELTA_THRESHOLD = 0.05
 
-# Rescale each locus's |attribution| profile to unit total mass across the
-# flanking positions before averaging groups, so a locus's total amount of
-# attribution (which may be error-correlated) can't masquerade as a
-# positional effect. See module docstring.
-PER_LOCUS_MASS_NORM = True
+# Per-orientation attribution normalization: "l1_mass" (each orientation
+# rescaled to unit absolute attribution mass across the flanks, so a
+# locus's total amount of attribution -- which may be error-correlated --
+# can't masquerade as a positional effect) or "pred_diff" (divide by the
+# absolute prediction shift, leaving that mass scalar in). See the module
+# docstring and seq_models/ig_attribution_norm.py.
+NORM_SCHEME = "l1_mass"
 
 # Divide each group's per-position mean by the overall (pooled) per-position
 # mean, so lines show relative deviation from the average positional
@@ -193,45 +207,29 @@ with open(os.path.join(ATTR_DIR, "meta.json"), "r") as f:
 layout = meta["sequence_layout"]
 rev_comp = data["rev_comp"]  # boolean: True for reverse complement samples
 
-n_samples = rev_comp.shape[0]
-
 # ============================================================================
 # Compute region boundaries
 # ============================================================================
 
-n_prefix = layout["n_prefix_prompt"]
-n_left_flank = layout["n_flanking_bp"]
-n_left_str = layout["n_str_bp"]
-n_str_prompt_region = layout["n_str_prompt"]
-n_right_str = layout["n_str_bp"]
-n_right_flank = layout["n_flanking_bp"]
-n_suffix_prompt = layout.get("n_suffix_prompt", 0)
+flanks = ign.FlankLayout.from_layout(layout)
 
-lf_start = n_prefix
-lf_end = n_prefix + n_left_flank
-rf_start = n_prefix + n_left_flank + n_left_str + n_str_prompt_region + n_right_str
-rf_end = rf_start + n_right_flank
+n_prefix = flanks.n_prefix
+n_left_flank = flanks.n_left_flank
+n_left_str = flanks.n_left_str
+n_str_prompt_region = flanks.n_str_prompt
+n_right_str = flanks.n_right_str
+n_right_flank = flanks.n_right_flank
+n_suffix_prompt = flanks.n_suffix_prompt
 
-region_blocks = [
-	("prefix_prompt", 0, n_prefix),
-	("left_flank",    lf_start, lf_end),
-	("left_str",      lf_end, lf_end + n_left_str),
-	("str_prompt",    lf_end + n_left_str,
-	                   lf_end + n_left_str + n_str_prompt_region),
-	("right_str",     lf_end + n_left_str + n_str_prompt_region,
-	                   rf_start),
-	("right_flank",   rf_start, rf_end),
-]
+lf_start = flanks.lf_start
+lf_end = flanks.lf_end
+rf_start = flanks.rf_start
+rf_end = flanks.rf_end
+
+region_blocks = flanks.region_blocks
 
 # Identify forward and RC indices among ALL samples (before filtering)
-fwd_indices = np.where(~rev_comp)[0]
-rc_indices = np.where(rev_comp)[0]
-
-assert len(fwd_indices) == len(rc_indices), (
-	f"Unequal forward ({len(fwd_indices)}) and RC ({len(rc_indices)}) "
-	f"sample counts. Cannot form 1:1 locus pairs."
-)
-
+fwd_indices, rc_indices = ign.pair_fwd_rc(rev_comp, ids=data["ids"])
 n_loci = len(fwd_indices)
 
 # ============================================================================
@@ -289,19 +287,6 @@ def get_group_colors(n, cmap_name, max_frac, mid_darken=0.0,
 			r, g, b = colorsys.hls_to_rgb(h, l * (1 - amount), s)
 		colors.append((r, g, b, a))
 	return colors
-
-
-def flank_mass(abs_norm_matrix):
-	"""Total |attribution| per sample across both flanking regions.
-
-	Only the flanks are summed because the baseline perturbs flanking
-	positions only -- prompt tokens and STR bases are ~zero by
-	construction and are not plotted.
-	"""
-	return (
-		abs_norm_matrix[:, lf_start:lf_end].sum(axis=1) +
-		abs_norm_matrix[:, rf_start:rf_end].sum(axis=1)
-	)
 
 
 def fold_flanks(abs_norm_matrix):
@@ -641,32 +626,26 @@ for task_idx, task_cfg in enumerate(TASK_CONFIGS):
 	predictions = data[f"predictions_{task}"]
 	labels = data[f"labels_{task}"]
 
-	raw_pred_diffs = raw_predictions - raw_baseline_predictions
-	abs_pred_diffs = np.abs(raw_pred_diffs)
+	# Filter, normalize per orientation, flip the RC flanks into forward
+	# genomic coordinates, average the SIGNED profiles, then take the
+	# absolute value. See seq_models/ig_attribution_norm.py.
+	loci = ign.per_locus_attributions(
+		attributions, raw_predictions, raw_baseline_predictions,
+		relative_deltas, rev_comp, flanks, ids=data["ids"],
+		scheme=NORM_SCHEME,
+		pred_diff_threshold=PRED_DIFF_THRESHOLD,
+		rel_delta_threshold=REL_DELTA_THRESHOLD,
+	)
 
-	mask = np.ones(n_samples, dtype=bool)
-	if PRED_DIFF_THRESHOLD > 0:
-		mask &= abs_pred_diffs > PRED_DIFF_THRESHOLD
-	if REL_DELTA_THRESHOLD is not None:
-		mask &= relative_deltas <= REL_DELTA_THRESHOLD
-
-	# Pair filter: both forward AND RC must pass for the locus to be included
-	pair_mask = mask[fwd_indices] & mask[rc_indices]
-	n_paired_kept = int(np.sum(pair_mask))
+	n_paired_kept = loci.n_loci
 	print(f"[{task}] {n_paired_kept} / {n_loci} loci kept "
 	      f"(both fwd and RC passed filters)")
-
-	if n_paired_kept == 0:
-		raise ValueError(f"No locus pairs passed filters for task '{task}'.")
-
-	kept_fwd_idx = fwd_indices[pair_mask]
-	kept_rc_idx = rc_indices[pair_mask]
 
 	# Average the forward and RC predictions for the same locus (the model
 	# is only approximately orientation-invariant) before comparing to the
 	# label. See module docstring.
-	avg_pred = (predictions[kept_fwd_idx] + predictions[kept_rc_idx]) / 2
-	locus_label_natural = labels[kept_fwd_idx]
+	avg_pred = (predictions[loci.fwd_idx] + predictions[loci.rc_idx]) / 2
+	locus_label_natural = labels[loci.fwd_idx]
 
 	if ERROR_METRIC == "mape":
 		nonzero = locus_label_natural != 0
@@ -674,11 +653,12 @@ for task_idx, task_cfg in enumerate(TASK_CONFIGS):
 		if n_excluded:
 			print(f"  [{task}] excluding {n_excluded} / {n_paired_kept} loci "
 			      f"with label==0 (MAPE undefined)")
-		kept_fwd_idx = kept_fwd_idx[nonzero]
-		kept_rc_idx = kept_rc_idx[nonzero]
+		# Normalization is per-locus independent, so dropping loci after the
+		# fact is equivalent to having filtered them out beforehand.
+		loci = loci.select(nonzero)
 		avg_pred = avg_pred[nonzero]
 		locus_label_natural = locus_label_natural[nonzero]
-		n_paired_kept = int(np.sum(nonzero))
+		n_paired_kept = loci.n_loci
 		error_values = np.abs(avg_pred - locus_label_natural) / np.abs(locus_label_natural)
 		error_fmt = "{:.1%}"
 		error_name = "MAPE"
@@ -691,34 +671,11 @@ for task_idx, task_cfg in enumerate(TASK_CONFIGS):
 		raise ValueError(f"No locus pairs left for task '{task}' after "
 		                  f"ERROR_METRIC={ERROR_METRIC!r} filtering.")
 
-	fwd_abs_norm = np.abs(
-		attributions[kept_fwd_idx] / raw_pred_diffs[kept_fwd_idx, None]
-	)
-	rc_abs_norm = np.abs(
-		attributions[kept_rc_idx] / raw_pred_diffs[kept_rc_idx, None]
-	)
+	avg_abs_norm = loci.avg_abs
 
-	# Total absolute attribution mass per locus, kept for reporting even
-	# when it is normalized out of the plotted profiles.
-	locus_mass = (flank_mass(fwd_abs_norm) + flank_mass(rc_abs_norm)) / 2
-
-	if PER_LOCUS_MASS_NORM:
-		# Rescale each orientation separately so the forward/RC average is a
-		# symmetrization of shape rather than being dominated by whichever
-		# orientation carried more mass. Two unit-mass profiles average to a
-		# unit-mass profile, so the result still has unit mass per locus.
-		fwd_abs_norm = fwd_abs_norm / flank_mass(fwd_abs_norm)[:, None]
-		rc_abs_norm = rc_abs_norm / flank_mass(rc_abs_norm)[:, None]
-
-	avg_abs_norm = np.zeros_like(fwd_abs_norm)
-	avg_abs_norm[:, lf_start:lf_end] = (
-		fwd_abs_norm[:, lf_start:lf_end] +
-		rc_abs_norm[:, rf_start:rf_end][:, ::-1]
-	) / 2
-	avg_abs_norm[:, rf_start:rf_end] = (
-		fwd_abs_norm[:, rf_start:rf_end] +
-		rc_abs_norm[:, lf_start:lf_end][:, ::-1]
-	) / 2
+	# Total absolute attribution mass per locus, in units of the prediction
+	# shift. Kept for reporting even when NORM_SCHEME divides it out.
+	locus_mass = loci.mass_ratio
 
 	groups = assign_quantile_groups(error_values, N_QUANTILES)
 
@@ -728,9 +685,9 @@ for task_idx, task_cfg in enumerate(TASK_CONFIGS):
 		range_str = (f"{error_fmt.format(g_values.min())}-"
 		             f"{error_fmt.format(g_values.max())}")
 
-		# Report the scalar that PER_LOCUS_MASS_NORM divides out: total
-		# |attribution| per locus, which may be error-correlated in its own
-		# right but is not a positional effect.
+		# Report the scalar that NORM_SCHEME="l1_mass" divides out: total
+		# |attribution| per locus in units of the prediction shift, which may
+		# be error-correlated in its own right but is not a positional effect.
 		print(f"  [{task}] Q{g + 1} [{range_str}] n={int(np.sum(g_mask))}  "
 		      f"mean total |attribution| mass = {locus_mass[g_mask].mean():.2f}")
 
@@ -745,17 +702,13 @@ for task_idx, task_cfg in enumerate(TASK_CONFIGS):
 	)
 
 	if NORMALIZE_BY_OVERALL_MEAN:
-		share_str = "share of attribution mass" if PER_LOCUS_MASS_NORM else "attribution"
+		share_str = ("share of attribution mass"
+		             if NORM_SCHEME == "l1_mass" else "attribution")
 		ylabel_str = f"Relative {share_str}\n(group mean / overall mean)"
-	elif PER_LOCUS_MASS_NORM:
-		ylabel_str = ("Share of |attribution| mass\n"
-		              "(per-locus mass normalized)")
 	else:
-		ylabel_str = ("|Normalized attribution|\n"
-		              "(fraction of total prediction shift)")
+		ylabel_str = ign.magnitude_axis_label(NORM_SCHEME)
 
-	mass_str = ("per-locus mass normalized" if PER_LOCUS_MASS_NORM
-	            else "NOT mass normalized")
+	mass_str = ign.scheme_description(NORM_SCHEME)
 	title_str = (
 		f"[{task_cfg['display_name']}] Forward+RC averaged IG attribution, "
 		f"stratified by {error_name} quantile ({N_QUANTILES} groups, "

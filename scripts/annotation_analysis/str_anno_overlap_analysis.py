@@ -65,7 +65,9 @@ STR_DATA_PATH = f"../../data/STR_data/HipSTR_labeled_STRs/str_len_{STR_LEN}_n_fl
 
 # ANNOTATION_SELECTION = "ChromHMM"  # a base name (prefix-expanded) or an exact config key
 # ANNOTATION_SELECTION = "ChromHMM_group"
-ANNOTATION_SELECTION = "phyloP"
+# ANNOTATION_SELECTION = "phyloP"
+ANNOTATION_SELECTION = "GC_content_9bp"
+
 
 # Targets, mirroring scripts/eval_preds/get_mean_baseline_performance.py
 TARGETS = {

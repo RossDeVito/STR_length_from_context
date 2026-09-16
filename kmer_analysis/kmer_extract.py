@@ -1,10 +1,20 @@
 """Extract k-mer IG attribution data for downstream enrichment analysis.
 
 Loads IG attribution results, pairs forward and reverse complement samples,
-normalizes attributions by prediction difference, averages forward and RC
-attributions in genomic coordinates, extracts canonical k-mers at each
-flanking position, and outputs a parquet file for downstream permutation
-testing.
+normalizes attributions, averages forward and RC attributions in genomic
+coordinates, extracts canonical k-mers at each flanking position, and
+outputs a parquet file for downstream permutation testing.
+
+Normalization and the forward/RC combination are the shared ones in
+seq_models/ig_attribution_norm.py; norm_scheme selects between "l1_mass"
+(each orientation rescaled to unit absolute attribution mass across the
+flanks) and "pred_diff" (each orientation divided by the ABSOLUTE
+prediction shift). Scores stay signed through the average. This used to
+divide by the SIGNED prediction difference, which flipped the sign of
+every sample predicted below its baseline, so a "positive" k-mer score
+meant "in the direction this locus moved from baseline" rather than
+"pushes the prediction up" -- and the two meanings were mixed together in
+one output column.
 
 Each row in the output represents one k-mer occurrence at one locus,
 with its distance from the STR, normalized IG score (mean over k positions),
@@ -31,6 +41,9 @@ Config keys:
         sequence. Default: 0.0 (no filter).
     rel_delta_threshold (float, optional): Maximum relative convergence
         delta to include a sample. Default: None (no filter).
+    norm_scheme (str, optional): Per-orientation attribution
+        normalization, "l1_mass" or "pred_diff". Default: "l1_mass".
+        See seq_models/ig_attribution_norm.py.
 """
 
 import argparse
@@ -42,6 +55,8 @@ import numpy as np
 import pandas as pd
 import yaml
 from tqdm import tqdm
+
+import seq_models.ig_attribution_norm as ign
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +159,9 @@ if __name__ == "__main__":
 	max_distance = config.get("max_distance", None)
 	pred_diff_threshold = config.get("pred_diff_threshold", 0.0)
 	rel_delta_threshold = config.get("rel_delta_threshold", None)
+	norm_scheme = ign.check_scheme(
+		config.get("norm_scheme", ign.DEFAULT_NORM_SCHEME)
+	)
 
 	# ------------------------------------------------------------------
 	# Set up output directory
@@ -177,22 +195,21 @@ if __name__ == "__main__":
 	rev_comp = data["rev_comp"]
 	hipstr_names = data["hipstr_names"]
 
-	n_samples, seq_len = attributions.shape
-
 	# ------------------------------------------------------------------
 	# Sequence layout
 	# ------------------------------------------------------------------
-	n_prefix = layout["n_prefix_prompt"]
-	n_left_flank = layout["n_flanking_bp"]
-	n_str_bp = layout["n_str_bp"]
-	n_str_prompt = layout["n_str_prompt"]
-	n_right_flank = layout["n_flanking_bp"]
+	flanks = ign.FlankLayout.from_layout(layout)
 
-	lf_start = n_prefix
-	lf_end = n_prefix + n_left_flank
-	rf_start = (n_prefix + n_left_flank + n_str_bp
-	            + n_str_prompt + n_str_bp)
-	rf_end = rf_start + n_right_flank
+	n_prefix = flanks.n_prefix
+	n_left_flank = flanks.n_left_flank
+	n_str_bp = flanks.n_left_str
+	n_str_prompt = flanks.n_str_prompt
+	n_right_flank = flanks.n_right_flank
+
+	lf_start = flanks.lf_start
+	lf_end = flanks.lf_end
+	rf_start = flanks.rf_start
+	rf_end = flanks.rf_end
 
 	print(f"Sequence layout: prefix={n_prefix}, "
 	      f"left_flank={n_left_flank}, str_bp={n_str_bp}, "
@@ -220,32 +237,21 @@ if __name__ == "__main__":
 	# Filter samples
 	# ------------------------------------------------------------------
 	raw_pred_diffs = raw_predictions - raw_baseline_predictions
-	abs_pred_diffs = np.abs(raw_pred_diffs)
 
-	mask = np.ones(n_samples, dtype=bool)
+	samp_filter = ign.filter_samples(
+		raw_pred_diffs, relative_deltas,
+		pred_diff_threshold, rel_delta_threshold,
+	)
+	mask = samp_filter.mask
+	n_kept = samp_filter.n_kept
 
-	excluded_pred_diff = 0
-	excluded_rel_delta = 0
-
-	if pred_diff_threshold > 0:
-		fail_pred = abs_pred_diffs <= pred_diff_threshold
-		excluded_pred_diff = int(np.sum(fail_pred))
-		mask &= ~fail_pred
-
-	if rel_delta_threshold is not None:
-		fail_delta = relative_deltas > rel_delta_threshold
-		excluded_rel_delta = int(np.sum(mask & fail_delta))
-		mask &= ~fail_delta
-
-	n_kept = int(np.sum(mask))
-	n_filtered = n_samples - n_kept
-	print(f"\nFiltering: {n_kept} samples kept, {n_filtered} filtered "
-	      f"(of {n_samples} total)")
+	print(f"\nFiltering: {n_kept} samples kept, {samp_filter.n_filtered} "
+	      f"filtered (of {samp_filter.n_total} total)")
 	print(f"  Excluded by |pred_diff| <= {pred_diff_threshold}: "
-	      f"{excluded_pred_diff}")
+	      f"{samp_filter.n_excluded_pred_diff}")
 	if rel_delta_threshold is not None:
 		print(f"  Excluded by rel_delta > {rel_delta_threshold}: "
-		      f"{excluded_rel_delta}")
+		      f"{samp_filter.n_excluded_rel_delta}")
 
 	if n_kept == 0:
 		raise ValueError("No samples passed filters. Adjust thresholds.")
@@ -297,27 +303,23 @@ if __name__ == "__main__":
 		raise ValueError("No locus pairs passed filters.")
 
 	# ------------------------------------------------------------------
-	# Normalize attributions (signed, divide by pred_diff)
+	# Normalize attributions (signed, shared scheme) and average forward
+	# with flipped-RC in genomic coordinates
 	# ------------------------------------------------------------------
-	fwd_norm = (attributions[kept_fwd_idx]
-	            / raw_pred_diffs[kept_fwd_idx, None])
-	rc_norm = (attributions[kept_rc_idx]
-	           / raw_pred_diffs[kept_rc_idx, None])
+	print(f"Normalization scheme: {norm_scheme}")
 
-	# ------------------------------------------------------------------
-	# Average forward and flipped-RC attributions in genomic coordinates
-	# ------------------------------------------------------------------
-	# Left flank: average forward left with flipped RC right
-	avg_left = (
-		fwd_norm[:, lf_start:lf_end]
-		+ rc_norm[:, rf_start:rf_end][:, ::-1]
-	) / 2
+	fwd_norm = ign.normalize_signed(
+		attributions[kept_fwd_idx], raw_pred_diffs[kept_fwd_idx],
+		flanks, norm_scheme,
+	)
+	rc_norm = ign.normalize_signed(
+		attributions[kept_rc_idx], raw_pred_diffs[kept_rc_idx],
+		flanks, norm_scheme,
+	)
 
-	# Right flank: average forward right with flipped RC left
-	avg_right = (
-		fwd_norm[:, rf_start:rf_end]
-		+ rc_norm[:, lf_start:lf_end][:, ::-1]
-	) / 2
+	avg = ign.combine_fwd_rc(fwd_norm, rc_norm, flanks)
+	avg_left = avg[:, lf_start:lf_end]
+	avg_right = avg[:, rf_start:rf_end]
 
 	print(f"Forward/RC averaging complete. "
 	      f"Left flank shape: {avg_left.shape}, "
@@ -420,8 +422,9 @@ if __name__ == "__main__":
 		"source_meta_path": meta_path,
 		"sequence_layout": layout,
 		"n_loci": n_loci,
-		"n_samples_total": n_samples,
-		"n_samples_filtered": n_filtered,
+		"n_samples_total": samp_filter.n_total,
+		"n_samples_filtered": samp_filter.n_filtered,
+		"norm_scheme": norm_scheme,
 		"n_rows": len(rows),
 		"n_unique_kmers": n_unique_kmers,
 		"max_distance_used": max_distance,

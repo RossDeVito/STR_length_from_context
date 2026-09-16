@@ -37,9 +37,6 @@ data/annotations/**
 # K-mer analysis output
 **/ig_kmers/output/
 
-# Permuted region importance output
-**/region_permutation_importance/output/
-
 # Ref genome files
 **/reference_genome/*.fa
 **/reference_genome/*.fai

@@ -14,6 +14,15 @@ Positive attribution = pushes prediction upward (toward higher copy number).
 Negative attribution = pushes prediction downward.
 Letter height encodes attribution magnitude; letter identity encodes the
 actual genomic base at that position.
+
+Normalization is the shared one in seq_models/ig_attribution_norm.py, selected by
+NORM_SCHEME. Note that it divides by an UNSIGNED scalar (the flank
+absolute attribution mass under "l1_mass", |F(input) - F(baseline)| under
+"pred_diff"). This file used to divide by the signed prediction
+difference, which silently flipped the sign of every locus predicted
+below its baseline -- "positive" then meant "in the direction this locus
+moved from baseline" rather than "pushes the prediction up", so the
+sign reading above was wrong for roughly half the loci.
 """
 
 import numpy as np
@@ -25,6 +34,8 @@ import json
 import os
 
 from seq_models.caduceus.model import inverse_transform
+
+import seq_models.ig_attribution_norm as ign
 
 
 def to_native(transform_name, value):
@@ -93,6 +104,11 @@ if __name__ == "__main__":
 	LOCUS_ID = "Human_STR_1010884"
 	MAX_DIST = 200  # max bp from STR to include in each direction
 
+	# Per-orientation attribution normalization: "l1_mass" (unit absolute
+	# attribution mass over the flanks) or "pred_diff" (divide by the
+	# absolute prediction shift from baseline). See seq_models/ig_attribution_norm.py.
+	NORM_SCHEME = "l1_mass"
+
 	# Figure
 	FIG_WIDTH = 30
 	FIG_HEIGHT_PER_ROW = 2.5
@@ -123,17 +139,19 @@ if __name__ == "__main__":
 	# Region boundaries
 	# ====================================================================
 
-	n_prefix = layout["n_prefix_prompt"]
-	n_left_flank = layout["n_flanking_bp"]
-	n_left_str = layout["n_str_bp"]
-	n_str_prompt = layout["n_str_prompt"]
-	n_right_str = layout["n_str_bp"]
-	n_right_flank = layout["n_flanking_bp"]
+	flanks = ign.FlankLayout.from_layout(layout)
 
-	lf_start = n_prefix
-	lf_end = lf_start + n_left_flank
-	rf_start = lf_end + n_left_str + n_str_prompt + n_right_str
-	rf_end = rf_start + n_right_flank
+	n_prefix = flanks.n_prefix
+	n_left_flank = flanks.n_left_flank
+	n_left_str = flanks.n_left_str
+	n_str_prompt = flanks.n_str_prompt
+	n_right_str = flanks.n_right_str
+	n_right_flank = flanks.n_right_flank
+
+	lf_start = flanks.lf_start
+	lf_end = flanks.lf_end
+	rf_start = flanks.rf_start
+	rf_end = flanks.rf_end
 
 	# ====================================================================
 	# Find forward and RC samples for this locus
@@ -153,7 +171,7 @@ if __name__ == "__main__":
 	assert rc_idx is not None, f"No RC sample found for {LOCUS_ID}"
 
 	# ====================================================================
-	# Normalize attributions (signed, divide by pred_diff)
+	# Normalize attributions (signed; shared scheme, unsigned denominator)
 	# ====================================================================
 
 	fwd_pred_diff = (
@@ -163,8 +181,13 @@ if __name__ == "__main__":
 		raw_predictions[rc_idx] - raw_baseline_predictions[rc_idx]
 	)
 
-	fwd_norm = attributions[fwd_idx] / fwd_pred_diff
-	rc_norm = attributions[rc_idx] / rc_pred_diff
+	pair_idx = [fwd_idx, rc_idx]
+	pair_norm = ign.normalize_signed(
+		attributions[pair_idx],
+		(raw_predictions[pair_idx] - raw_baseline_predictions[pair_idx]),
+		flanks, NORM_SCHEME,
+	)
+	fwd_norm, rc_norm = pair_norm[0], pair_norm[1]
 
 	# ====================================================================
 	# Extract flanking attributions and sequences

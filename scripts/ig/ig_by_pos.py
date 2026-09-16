@@ -11,11 +11,13 @@ Two subplots:
      This symmetrizes the signal and halves the prompt-proximity artifact,
      which is model-position-dependent rather than genomic-position-dependent.
 
-Normalization: each sample's attributions are divided by the raw prediction
-difference (F(input) - F(baseline)), so attributions sum to ~1 per sample
-and are comparable across loci with different prediction magnitudes. The
-absolute value is then taken as a measure of importance regardless of
-direction.
+Normalization and forward/RC combination are the shared ones defined in
+seq_models/ig_attribution_norm.py; NORM_SCHEME selects between "l1_mass" (each
+orientation rescaled to unit absolute attribution mass over the flanks)
+and "pred_diff" (each orientation divided by |F(input) - F(baseline)|).
+Both keep the sign through the forward/RC average, and the absolute value
+is taken last -- abs-of-mean, not mean-of-abs, so positions where the two
+orientations disagree in sign are down-weighted rather than summed.
 """
 
 import numpy as np
@@ -23,7 +25,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import json
 import os
-from tqdm import trange
+
+import seq_models.ig_attribution_norm as ign
 
 # ============================================================================
 # Configuration
@@ -36,6 +39,11 @@ ATTR_DIR = "output/caduceus_v0/str3/str3_f5000_fiv_v4"
 # {ATTR_DIR}/meta.json "task_names").
 # TASK = "length"
 TASK = "variation"
+
+# Per-orientation attribution normalization: "l1_mass" (unit absolute
+# attribution mass over the flanks) or "pred_diff" (divide by the absolute
+# prediction shift from baseline). See seq_models/ig_attribution_norm.py.
+NORM_SCHEME = "l1_mass"
 
 # Confidence interval level (0-1), e.g. 0.95 for 95% CI
 CI_LEVEL = 0.95
@@ -80,67 +88,48 @@ relative_deltas = data[f"relative_convergence_deltas_{TASK}"]
 labels = data[f"labels_{TASK}"]
 rev_comp = data["rev_comp"]  # boolean: True for reverse complement samples
 
-n_samples, seq_len = attributions.shape
+seq_len = attributions.shape[1]
 
 # ============================================================================
 # Compute region boundaries
 # ============================================================================
 
-n_prefix = layout["n_prefix_prompt"]
-n_left_flank = layout["n_flanking_bp"]
-n_left_str = layout["n_str_bp"]
-n_str_prompt_region = layout["n_str_prompt"]
-n_right_str = layout["n_str_bp"]
-n_right_flank = layout["n_flanking_bp"]
-# A trailing suffix_prompt block (if any) sits after right_flank and is never
-# indexed below, so it doesn't affect any of the region-boundary math here.
-n_suffix_prompt = layout.get("n_suffix_prompt", 0)
+flanks = ign.FlankLayout.from_layout(layout)
 
-lf_start = n_prefix
-lf_end = n_prefix + n_left_flank
-rf_start = n_prefix + n_left_flank + n_left_str + n_str_prompt_region + n_right_str
-rf_end = rf_start + n_right_flank
+n_prefix = flanks.n_prefix
+n_left_flank = flanks.n_left_flank
+n_left_str = flanks.n_left_str
+n_str_prompt_region = flanks.n_str_prompt
+n_right_str = flanks.n_right_str
+n_right_flank = flanks.n_right_flank
+n_suffix_prompt = flanks.n_suffix_prompt
+
+lf_start = flanks.lf_start
+lf_end = flanks.lf_end
+rf_start = flanks.rf_start
+rf_end = flanks.rf_end
 
 # Region blocks in array-index space (for smoothing)
-region_blocks = [
-	("prefix_prompt", 0, n_prefix),
-	("left_flank",    lf_start, lf_end),
-	("left_str",      lf_end, lf_end + n_left_str),
-	("str_prompt",    lf_end + n_left_str,
-	                   lf_end + n_left_str + n_str_prompt_region),
-	("right_str",     lf_end + n_left_str + n_str_prompt_region,
-	                   rf_start),
-	("right_flank",   rf_start, rf_end),
-]
+region_blocks = flanks.region_blocks
 
 # ============================================================================
 # Filter samples
 # ============================================================================
 
 raw_pred_diffs = raw_predictions - raw_baseline_predictions
-abs_pred_diffs = np.abs(raw_pred_diffs)
 
-mask = np.ones(n_samples, dtype=bool)
+samp_filter = ign.filter_samples(
+	raw_pred_diffs, relative_deltas, PRED_DIFF_THRESHOLD, REL_DELTA_THRESHOLD
+)
+mask = samp_filter.mask
+n_kept = samp_filter.n_kept
 
-excluded_pred_diff = 0
-excluded_rel_delta = 0
-
-if PRED_DIFF_THRESHOLD > 0:
-	fail_pred = abs_pred_diffs <= PRED_DIFF_THRESHOLD
-	excluded_pred_diff = int(np.sum(fail_pred))
-	mask &= ~fail_pred
-
-if REL_DELTA_THRESHOLD is not None:
-	fail_delta = relative_deltas > REL_DELTA_THRESHOLD
-	excluded_rel_delta = int(np.sum(mask & fail_delta))
-	mask &= ~fail_delta
-
-n_kept = int(np.sum(mask))
-n_filtered = n_samples - n_kept
-print(f"Subplot 1 (all samples): {n_kept} kept, {n_filtered} filtered "
-      f"(of {n_samples} total)")
-print(f"  Excluded by pred_diff <= {PRED_DIFF_THRESHOLD}: {excluded_pred_diff}")
-print(f"  Excluded by rel_delta > {REL_DELTA_THRESHOLD}: {excluded_rel_delta}")
+print(f"Subplot 1 (all samples): {n_kept} kept, {samp_filter.n_filtered} "
+      f"filtered (of {samp_filter.n_total} total)")
+print(f"  Excluded by pred_diff <= {PRED_DIFF_THRESHOLD}: "
+      f"{samp_filter.n_excluded_pred_diff}")
+print(f"  Excluded by rel_delta > {REL_DELTA_THRESHOLD}: "
+      f"{samp_filter.n_excluded_rel_delta}")
 
 if n_kept == 0:
 	raise ValueError("No samples passed filters. Adjust thresholds.")
@@ -149,72 +138,29 @@ if n_kept == 0:
 # Normalize and take absolute value (all filtered samples, for subplot 1)
 # ============================================================================
 
-all_norm = attributions[mask] / raw_pred_diffs[mask, None]
-all_abs_norm = np.abs(all_norm)
+all_abs_norm = np.abs(ign.normalize_signed(
+	attributions[mask], raw_pred_diffs[mask], flanks, NORM_SCHEME
+))
 
 # ============================================================================
 # Pair forward and RC samples by locus for subplot 2
 # ============================================================================
 
-# Identify forward and RC indices among ALL samples (before filtering)
-fwd_indices = np.where(~rev_comp)[0]
-rc_indices = np.where(rev_comp)[0]
-
-assert len(fwd_indices) == len(rc_indices), (
-	f"Unequal forward ({len(fwd_indices)}) and RC ({len(rc_indices)}) "
-	f"sample counts. Cannot form 1:1 locus pairs."
+# Normalize each orientation, flip the RC flanks into forward genomic
+# coordinates, average the SIGNED profiles, then take the absolute value
+# (abs-of-mean). See seq_models/ig_attribution_norm.py for the full definition.
+loci = ign.per_locus_attributions(
+	attributions, raw_predictions, raw_baseline_predictions, relative_deltas,
+	rev_comp, flanks, ids=data["ids"], scheme=NORM_SCHEME,
+	sample_filter=samp_filter,
 )
 
-n_loci = len(fwd_indices)
-print(f"\nFound {n_loci} loci with forward + RC pairs")
+avg_abs_norm = loci.avg_abs
+n_paired_kept = loci.n_loci
 
-# Pair filter: both forward AND RC must pass for the locus to be included
-pair_mask = mask[fwd_indices] & mask[rc_indices]
-n_paired_kept = int(np.sum(pair_mask))
+print(f"\nFound {loci.n_loci_total} loci with forward + RC pairs")
 print(f"Subplot 2 (averaged): {n_paired_kept} loci kept "
       f"(both fwd and RC passed filters)")
-
-if n_paired_kept == 0:
-	raise ValueError("No locus pairs passed filters. Adjust thresholds.")
-
-kept_fwd_idx = fwd_indices[pair_mask]
-kept_rc_idx = rc_indices[pair_mask]
-
-# Normalize each sample by its own pred_diff, take abs
-fwd_abs_norm = np.abs(attributions[kept_fwd_idx] / raw_pred_diffs[kept_fwd_idx, None])
-rc_abs_norm = np.abs(attributions[kept_rc_idx] / raw_pred_diffs[kept_rc_idx, None])
-
-# ============================================================================
-# Average forward and flipped-RC attributions at corresponding genomic
-# positions
-# ============================================================================
-
-# In the RC run the model sees:
-#   prefix | RC(genomic_right_flank) | RC(STR) | RC(genomic_left_flank)
-#
-# So the RC's left-flank positions (array indices lf_start:lf_end) contain
-# the reverse complement of the original RIGHT flank, with the STR-adjacent
-# end at lf_end-1 and the distal end at lf_start.
-#
-# Flipping the RC's right flank ([::-1]) aligns it with the forward's left
-# flank by genomic distance from the STR, and vice versa.
-
-avg_abs_norm = np.zeros_like(fwd_abs_norm)
-
-# Left flank: average forward left with flipped RC right
-avg_abs_norm[:, lf_start:lf_end] = (
-	fwd_abs_norm[:, lf_start:lf_end] +
-	rc_abs_norm[:, rf_start:rf_end][:, ::-1]
-) / 2
-
-# Right flank: average forward right with flipped RC left
-avg_abs_norm[:, rf_start:rf_end] = (
-	fwd_abs_norm[:, rf_start:rf_end] +
-	rc_abs_norm[:, lf_start:lf_end][:, ::-1]
-) / 2
-
-# Non-flank regions (prompt tokens, STR bases) are ~zero by construction;
-# leave as zeros.
 
 # ============================================================================
 # Compute means and bootstrap CIs
@@ -423,7 +369,7 @@ def plot_attribution_panel(ax, mean_attr, ci_lower, ci_upper, title_str):
 	)
 
 	ax.set_xlabel("Position relative to STR (bp)")
-	ax.set_ylabel("|Normalized attribution|\n(fraction of total prediction shift)")
+	ax.set_ylabel(ign.magnitude_axis_label(NORM_SCHEME))
 
 	smoothing_str = (f", smoothing={SMOOTHING_WINDOW}"
 	                 if SMOOTHING_WINDOW and SMOOTHING_WINDOW > 1 else "")
@@ -461,7 +407,8 @@ plot_attribution_panel(
 	f"[{TASK}] All samples IG attribution magnitude ({n_kept} samples, "
 	f"{int(CI_LEVEL*100)}% CI)\n"
 	f"pred_diff_threshold={PRED_DIFF_THRESHOLD}, "
-	f"rel_delta_threshold={REL_DELTA_THRESHOLD}"
+	f"rel_delta_threshold={REL_DELTA_THRESHOLD}, "
+	f"{ign.scheme_description(NORM_SCHEME)}"
 )
 
 plot_attribution_panel(
@@ -469,7 +416,8 @@ plot_attribution_panel(
 	f"[{TASK}] Forward + RC averaged IG attribution magnitude ({n_paired_kept} loci, "
 	f"{int(CI_LEVEL*100)}% CI)\n"
 	f"pred_diff_threshold={PRED_DIFF_THRESHOLD}, "
-	f"rel_delta_threshold={REL_DELTA_THRESHOLD}"
+	f"rel_delta_threshold={REL_DELTA_THRESHOLD}, "
+	f"{ign.scheme_description(NORM_SCHEME)}"
 )
 
 # Only show x-axis label on the bottom subplot

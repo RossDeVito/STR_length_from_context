@@ -26,7 +26,7 @@ Config keys:
 	model_dir (str): Trained model directory, relative to
 		scripts/training/output/caduceus/ (contains checkpoints/ and
 		config.yaml) -- the same convention as
-		seq_models/caduceus/region_permutation_importance.py.
+		seq_models/caduceus/predict.py.
 	desc (str): Output name/path relative to output_dir.
 	split (str): Split to run on ('test', 'val', 'train').
 	batch_size (int): Override the model's data-loading batch size (data is
@@ -38,8 +38,8 @@ Config keys:
 	method (str): Captum IG integration method. Default "gausslegendre".
 	subsample_loci (int, optional): If set, deterministically restrict the
 		split to this many unique loci (both fwd/RC orientations kept per
-		locus, via region_permutation_importance.subsample_dataset) -- for
-		fast, reproducible method/n_steps comparison runs.
+		locus, via predict.subsample_dataset) -- for fast, reproducible
+		method/n_steps comparison runs.
 	seed (int): Random seed for `subsample_loci`. Default 42.
 
 Outputs (written to {output_dir}/{desc}/):
@@ -109,10 +109,7 @@ import yaml
 from tqdm import tqdm
 
 from seq_models.caduceus.model import inverse_transform
-from seq_models.caduceus.region_permutation_importance import (
-	load_model_and_data,
-	subsample_dataset,
-)
+from seq_models.caduceus.predict import load_model_and_data, subsample_dataset
 
 
 # ---------------------------------------------------------------------------
@@ -382,8 +379,8 @@ def main():
 	print(f"Outputs will be saved to: {run_dir}")
 
 	# ------------------------------------------------------------------
-	# Load model + data (predict.py / region_permutation_importance.py
-	# pattern: read the model's own config.yaml, build the data module from
+	# Load model + data (predict.py pattern: read the model's own
+	# config.yaml, build the data module from
 	# it, load the best checkpoint).
 	# ------------------------------------------------------------------
 	model, model_config, dataset, _ = load_model_and_data(config)

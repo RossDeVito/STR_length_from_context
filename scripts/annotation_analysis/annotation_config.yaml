@@ -56,3 +56,36 @@ ChromHMM_group:
   columns: [chrom, start, end, segment_name]
   value_column: Group
   join_path: ../../data/annotations/full_stack_ChromHMM/state_annotations_processed.csv
+
+GC_content_5bp:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/GC_content/GC_content_5bp.bw
+  genome_build: hg38
+  description: >
+    Local GC fraction: per-bp centered 5bp window (+/-2bp), from
+    data/scripts/create_GC_content_anno_file.py. Covers only the STR +/-
+    10kb regions in data/STR_data/HipSTR_labeled_STRs for motifs len 3 and 4,
+    not genome-wide -- positions elsewhere read back as missing/NaN.
+
+GC_content_9bp:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/GC_content/GC_content_9bp.bw
+  genome_build: hg38
+  description: >
+    Local GC fraction: per-bp centered 9bp window (+/-4bp), from
+    data/scripts/create_GC_content_anno_file.py. Covers only the STR +/-
+    10kb regions in data/STR_data/HipSTR_labeled_STRs for motifs len 3 and 4,
+    not genome-wide -- positions elsewhere read back as missing/NaN.
+
+GC_content_25bp:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/GC_content/GC_content_25bp.bw
+  genome_build: hg38
+  description: >
+    Local GC fraction: per-bp centered 25bp window (+/-12bp), from
+    data/scripts/create_GC_content_anno_file.py. Covers only the STR +/-
+    10kb regions in data/STR_data/HipSTR_labeled_STRs for motifs len 3 and 4,
+    not genome-wide -- positions elsewhere read back as missing/NaN.

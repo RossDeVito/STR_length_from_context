@@ -24,12 +24,16 @@ Args:
 import argparse
 import os
 
+import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import yaml
 
 from seq_models.caduceus.data import create_data_module
 from seq_models.caduceus.model import STRLengthModel
+
+# Base directory holding trained Caduceus models (matches make_predictions.sh).
+CADUCEUS_MODEL_DIR = "scripts/training/output/caduceus"
 
 
 def aggregate_predictions(predictions, task_names):
@@ -113,6 +117,98 @@ def find_best_checkpoint(model_dir):
 			f"Multiple checkpoints in {checkpoint_dir} and none marked 'best'."
 		)
 	return os.path.join(checkpoint_dir, ckpt_files[0])
+
+
+def load_model_and_data(config):
+	"""Load a trained model and build the dataset for a requested split.
+
+	Reads the model's own config.yaml, overrides a few loader-relevant keys
+	from ``config``, builds the data module, and picks the dataset for the
+	split.
+
+	Args:
+		config (dict): Parsed config with keys ``model_dir`` (relative to
+			CADUCEUS_MODEL_DIR), ``split``, and optionally ``batch_size`` /
+			``num_workers``.
+
+	Returns:
+		Tuple (model, model_config, dataset, str_df) where dataset is the
+		STRLengthDataset for the split and str_df is its underlying DataFrame.
+	"""
+	full_model_dir = os.path.join(CADUCEUS_MODEL_DIR, config["model_dir"])
+
+	model_config_path = os.path.join(full_model_dir, "config.yaml")
+	print(f"Loading model config from {model_config_path}")
+	with open(model_config_path, "r") as f:
+		model_config = yaml.safe_load(f)
+
+	# Override the loader-relevant keys from the caller's config.
+	model_config["batch_size"] = config.get(
+		"batch_size", model_config.get("batch_size", 16)
+	)
+	model_config["dataloader_num_workers"] = config.get(
+		"num_workers", model_config.get("dataloader_num_workers", 4)
+	)
+
+	data_module = create_data_module(model_config)
+	data_module.setup()
+
+	split = config["split"]
+	if split == "test":
+		dataset = data_module.test_dataset
+	elif split == "val":
+		dataset = data_module.val_dataset
+	elif split == "train":
+		dataset = data_module.train_dataset
+	else:
+		raise ValueError(
+			f"Invalid split: {split}. Must be 'test', 'val', or 'train'."
+		)
+
+	ckpt_path = find_best_checkpoint(full_model_dir)
+	print(f"Loading model from checkpoint {ckpt_path}")
+	model = STRLengthModel.load_from_checkpoint(ckpt_path, map_location="cpu")
+	model.eval()
+
+	return model, model_config, dataset, dataset.str_df
+
+
+def subsample_dataset(dataset, n_loci, seed):
+	"""Restrict a dataset to n_loci unique loci, keeping BOTH orientations.
+
+	Deterministically (seeded) selects n_loci unique ``ID`` values and filters
+	the dataset's str_df to the rows for those ids (forward + reverse
+	complement). The dataset is filtered in place and its index reset.
+
+	Args:
+		dataset (STRLengthDataset): Dataset to subsample (modified in place).
+		n_loci (int): Number of unique loci to keep.
+		seed (int): Random seed.
+
+	Returns:
+		The same dataset, with a reduced str_df.
+	"""
+	df = dataset.str_df
+	unique_ids = np.sort(df["ID"].unique())
+	if n_loci >= len(unique_ids):
+		print(
+			f"  subsample_loci={n_loci} >= {len(unique_ids)} unique loci; "
+			f"using all."
+		)
+		return dataset
+
+	rng = np.random.default_rng(seed)
+	chosen = rng.choice(unique_ids, size=n_loci, replace=False)
+	chosen_set = set(chosen.tolist())
+
+	dataset.str_df = (
+		df[df["ID"].isin(chosen_set)].reset_index(drop=True)
+	)
+	print(
+		f"  Subsampled to {n_loci} loci "
+		f"({len(dataset.str_df)} orientation rows)."
+	)
+	return dataset
 
 
 if __name__ == "__main__":
