@@ -60,9 +60,12 @@ alike.
 IG samples are joined to genomic coordinates via attributions.npz's `ids`
 array (the source tsv's `ID` column, shared by a locus's fwd/RC pair), so
 STR_DATA_PATH must be the tsv used to train the checkpoint behind ATTR_DIR.
-Flanks map to the reference as left = [str_start - n_flanking_bp,
-str_start) and right = [str_end, str_end + n_flanking_bp), matching
-seq_models/caduceus/data.py.
+Those two always have to move together, so STR_MOTIF_LEN picks both rather
+than each being set by hand: a mismatched pair (e.g. a str4 checkpoint
+against the str_len_3 tsv) only surfaces as every locus id missing from the
+tsv, in load_str_coords(). Flanks map to the reference as left = [str_start
+- n_flanking_bp, str_start) and right = [str_end, str_end + n_flanking_bp),
+matching seq_models/caduceus/data.py.
 
 Configuration is via the editable constants below (no argparse), mirroring
 the rest of this directory.
@@ -86,17 +89,41 @@ import annotation_utils as au
 # Configuration
 # ===========================================================================
 
-ATTR_DIR = "../ig/output/caduceus_v0/str3/str3_f5000_fiv_v4"
+# STR motif length to analyze. This is the only knob to turn: it selects
+# both the IG attribution directory and the STR tsv below, which must be the
+# matched pair the checkpoint was trained on.
+STR_MOTIF_LEN = 4  # 3 | 4
 
-# Which task's attributions to use (must be one of the checkpoint's active
-# targets -- see {ATTR_DIR}/meta.json "task_names").
-# TASK = "length"
-TASK = "variation"
+# Per-motif-length IG attribution directories. Listed rather than templated
+# because the str4 run's name carries a different suffix than str3's.
+ATTR_DIRS = {
+	3: "../ig/output/caduceus_v0/str3/str3_f5000_fiv_v4",
+	4: "../ig/output/caduceus_v0/str4/str4_f5000_fiv_v4_225",
+}
+
+N_FLANKING = 10000  # must match the STR tsv's filename suffix
+
+if STR_MOTIF_LEN not in ATTR_DIRS:
+	raise ValueError(
+		f"STR_MOTIF_LEN must be one of {sorted(ATTR_DIRS)}, got "
+		f"{STR_MOTIF_LEN!r}. Add the motif length's attribution directory to "
+		f"ATTR_DIRS to analyze it."
+	)
+
+ATTR_DIR = ATTR_DIRS[STR_MOTIF_LEN]
 
 # tsv used to train the checkpoint behind ATTR_DIR (see its config.yaml
 # "data_path"). Must be the exact file so attributions.npz's `ids` can be
 # joined to chrom/str_start/str_end.
-STR_DATA_PATH = "../../data/STR_data/HipSTR_labeled_STRs/str_len_3_n_flanking_10000.tsv"
+STR_DATA_PATH = (
+	f"../../data/STR_data/HipSTR_labeled_STRs/"
+	f"str_len_{STR_MOTIF_LEN}_n_flanking_{N_FLANKING}.tsv"
+)
+
+# Which task's attributions to use (must be one of the checkpoint's active
+# targets -- see {ATTR_DIR}/meta.json "task_names").
+TASK = "length"
+# TASK = "variation"
 
 # Continuous annotation to correlate against: an exact annotation_config.yaml
 # key whose value_type is "continuous".
@@ -104,6 +131,9 @@ STR_DATA_PATH = "../../data/STR_data/HipSTR_labeled_STRs/str_len_3_n_flanking_10
 ANNOTATION_TYPE = "GC_content_5bp"
 # ANNOTATION_TYPE = "GC_content_9bp"
 # ANNOTATION_TYPE = "GC_content_25bp"
+# ANNOTATION_TYPE = "G4Hunter_5bp"
+# ANNOTATION_TYPE = "G4Hunter_9bp"
+# ANNOTATION_TYPE = "G4Hunter_25bp"
 
 # abs() the per-bp annotation values before correlating. For phyloP this
 # turns "conserved vs accelerated" into "under selection either way".
@@ -366,7 +396,7 @@ def main():
 
 	print("=" * 70)
 	print(f"Intra-locus IG x {ANNOTATION_TYPE} correlation  "
-	      f"[task={task_display}]")
+	      f"[str_len={STR_MOTIF_LEN}, task={task_display}]")
 	print("=" * 70)
 
 	loci = ign.per_locus_attributions(
@@ -531,7 +561,9 @@ def main():
 	         f"{N_PERMUTATIONS:,} permutations)" if n_extreme == 0 else ""))
 
 	results = {
+		"str_motif_len": STR_MOTIF_LEN,
 		"attr_dir": ATTR_DIR,
+		"str_data_path": STR_DATA_PATH,
 		"task": TASK,
 		"task_display": task_display,
 		"annotation_type": ANNOTATION_TYPE,
@@ -610,7 +642,7 @@ def plot(rho, rho_bar, ci_lo, ci_hi, null, p_value, n_loci, n_positions,
 
 	fig.suptitle(
 		f"Intra-locus IG x {anno_label} correlation  "
-		f"[{ign.scheme_description(NORM_SCHEME)}, "
+		f"[str_len={STR_MOTIF_LEN}, {ign.scheme_description(NORM_SCHEME)}, "
 		f"pred_diff>{PRED_DIFF_THRESHOLD}, "
 		f"rel_delta<={REL_DELTA_THRESHOLD}, seed={SEED}]",
 		fontsize=10,

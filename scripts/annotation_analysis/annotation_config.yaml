@@ -89,3 +89,89 @@ GC_content_25bp:
     data/scripts/create_GC_content_anno_file.py. Covers only the STR +/-
     10kb regions in data/STR_data/HipSTR_labeled_STRs for motifs len 3 and 4,
     not genome-wide -- positions elsewhere read back as missing/NaN.
+
+# G4Hunter family. Per-base score is +min(run, 4) inside a run of
+# consecutive Gs, -min(run, 4) inside a run of Cs, 0 for A/T/N; the raw
+# score at a position is the mean of those over a centered window. score
+# >= 1.2 is the paper's usual G4-forming threshold (1.5 for higher
+# specificity), so the 25bp entry -- G4Hunter's canonical window -- is the
+# only one of these that is a G4 caller; 9bp and 5bp exist to match the
+# GC_content family's window sizes, so the two annotations can be compared
+# at the SAME smoothing instead of confounding annotation type with window
+# width. At those widths the value is local G/C run content, not G4
+# propensity, and the 1.2 / 1.5 thresholds do not apply.
+#
+# STRAND: these tracks store the MAX OF THE TWO STRANDS, which is exactly
+# abs() of the raw forward score -- at a fixed coordinate the minus-strand
+# window score is the negation of the plus-strand one, so max(s, -s) ==
+# abs(s). Stored values are therefore non-negative, strand-agnostic G4
+# propensity: the same on a locus's fwd and rev_comp rows, and needing no
+# negation or abs() anywhere downstream (leave ANNOTATION_ABS alone -- it is
+# already a no-op for these). The abs is applied to the window mean, not per
+# base, so a window whose G and C runs offset each other correctly stays
+# near zero instead of reading as G-rich.
+#
+# NOTE the score converges on plain GC content as the window narrows --
+# Spearman against a matched-window GC track is 0.45 at 25bp, 0.57 at 9bp,
+# 0.61 at 5bp (and 0.96 at 1bp, where it is just the G/C base indicator).
+# So the narrow entries are partly re-measuring GC, and the 25bp entry is
+# where the score is most its own thing: there, at fixed GC it still spans
+# nearly its whole range, and only ~9% of top-decile-GC positions clear
+# 1.2. Worth checking any positive result against GC at the SAME window
+# (partial correlation, or stratifying by GC) to show it is run structure
+# and not composition.
+
+G4Hunter_25bp:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/G4Hunter/G4Hunter_25bp.bw
+  genome_build: hg38
+  description: >
+    G4Hunter G-quadruplex propensity score: per-bp centered 25bp window
+    (+/-12bp), G4Hunter's canonical window size, from
+    data/scripts/create_G4Hunter_anno_file.py. Non-negative: the stored
+    value is the max of the two strands' scores (== abs of the raw
+    forward-strand score), so it is strand-agnostic G4-forming propensity
+    and needs no sign handling downstream. Threshold at 1.2 (1.5 for higher
+    specificity). Covers only the STR +/- 10kb regions in
+    data/STR_data/HipSTR_labeled_STRs for motifs len 3 and 4, not
+    genome-wide -- positions elsewhere read back as missing/NaN.
+  doi: 10.1093/nar/gkw006
+
+G4Hunter_9bp:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/G4Hunter/G4Hunter_9bp.bw
+  genome_build: hg38
+  description: >
+    G4Hunter score over a per-bp centered 9bp window (+/-4bp), from
+    data/scripts/create_G4Hunter_anno_file.py. Far narrower than the
+    canonical 25bp window, so this is local G/C run content rather than a
+    G4 call -- the 1.2 threshold does not apply, and it is ~0.57 Spearman
+    with GC_content_9bp. Exists to pair with that entry for same-window
+    comparisons against the GC_content family. Non-negative: the stored
+    value is the max of the two strands' scores (== abs of the raw
+    forward-strand score), so it is strand-agnostic and needs no sign
+    handling downstream. Covers only the STR +/- 10kb regions in
+    data/STR_data/HipSTR_labeled_STRs for motifs len 3 and 4, not
+    genome-wide -- positions elsewhere read back as missing/NaN.
+  doi: 10.1093/nar/gkw006
+
+G4Hunter_5bp:
+  file_type: bigwig
+  value_type: continuous
+  path: ../../data/annotations/G4Hunter/G4Hunter_5bp.bw
+  genome_build: hg38
+  description: >
+    G4Hunter score over a per-bp centered 5bp window (+/-2bp), from
+    data/scripts/create_G4Hunter_anno_file.py. The narrowest of the family
+    and the most GC-like (~0.61 Spearman with GC_content_5bp): this is
+    local G/C run content at near-per-base resolution, not a G4 call, and
+    the 1.2 threshold does not apply. Exists to pair with GC_content_5bp
+    for same-window comparisons. Non-negative: the stored value is the max
+    of the two strands' scores (== abs of the raw forward-strand score), so
+    it is strand-agnostic and needs no sign handling downstream. Covers
+    only the STR +/- 10kb regions in data/STR_data/HipSTR_labeled_STRs for
+    motifs len 3 and 4, not genome-wide -- positions elsewhere read back as
+    missing/NaN.
+  doi: 10.1093/nar/gkw006

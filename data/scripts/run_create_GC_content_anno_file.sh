@@ -2,10 +2,13 @@
 
 # Create local-GC-content bigWig annotations at several window sizes,
 # covering the STR +/- N_FLANKING regions used by the labeled HipSTR STR
-# datasets (str_len_1..6). One bigWig per window size; window sizes must be
-# odd (centered window, equal bases on each side).
+# datasets for motif lengths 3 and 4. One bigWig per window size; window
+# sizes must be odd (centered window, equal bases on each side).
+#
+# These three window sizes are the ones registered in
+# scripts/annotation_analysis/annotation_config.yaml as GC_content_<n>bp.
 
-WINDOW_SIZES=(101 501 2001 10001)
+WINDOW_SIZES=(5 9 25)
 N_FLANKING=10000
 STR_DATA_DIR="../STR_data/HipSTR_labeled_STRs"
 REF_GENOME="../reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa"
